@@ -31,7 +31,7 @@ def main_test():
     model = load_model()
 
     # 2. Provide a sample image path (ensure the file exists)
-    sample_image = "../sample_image.jpg"
+    sample_image = "videos/zvision_test.mp4"
 
     # 3. Run inference
     results = run_inference(model, sample_image)
