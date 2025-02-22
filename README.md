@@ -1,5 +1,3 @@
-# zvision: Updated README
-
 ## Overview
 This repository contains:
 - A **FastAPI** server for handling store data, logs, and detection endpoints.
