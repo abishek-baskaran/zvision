@@ -1,2 +1,16 @@
+# .gitignore
+
+# Ignore ALL hidden files/directories (e.g., .env, .ipynb_checkpoints, .virtual_documents)
+.*
+!.gitignore  # Except keep the .gitignore file itself
+
+# Ignore specific file extensions
+*.onnx
+*.pt
+*.mp4
+
+# Ignore common directories
 checkpoints/
 videos/
+.ipynb_checkpoints/
+.virtual_documents/
