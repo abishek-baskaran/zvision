@@ -7,7 +7,7 @@ def load_model(model_path='yolov8n.pt'):
     Default model is 'yolov8n.pt' (lightweight).
     """
     model = YOLO(model_path)
-    return model
+    return model.to('cpu')
 
 def run_inference(model, image_path):
     """
