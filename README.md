@@ -1,98 +1,96 @@
+# ZVision: Entry-Exit Detection & Calibration
+
+This repository demonstrates a complete pipeline for detecting entries/exits in a store environment using:
+
+- **FastAPI** for the backend server
+- **SQLite** for local data storage (stores, cameras, calibrations, events)
+- **YOLO** (Ultralytics) for object detection
+- **Flutter** for a simple calibration UI (optional demo)
+
 ## Overview
-This repository contains:
-- A **FastAPI** server for handling store data, logs, and detection endpoints.
-- A **YOLO-based** (or NCNN-based) detection pipeline (in `counter.py`) that processes video files or camera streams.
-- A **SQLite** database (in `database.py`) storing events and logs for analytics.
-- Various utility scripts for testing, clip FIFO cleanup, etc.
 
-Below are instructions for both the FastAPI server usage and the video annotation pipeline.
+1. **Stores**  
+   - Each store is identified by a `store_id`.  
+   - The system can handle multiple stores.
 
----
+2. **Cameras**  
+   - Each camera row references a store (`store_id`) and has a unique `camera_id`.  
+   - A store can have multiple cameras.  
+   - The `camera_name` can be a friendly label or an RTSP link.
 
-## 1. Environment Setup
+3. **Calibrations**  
+   - Each `camera_id` can have a unique calibration line (or multiple if you remove the UNIQUE constraint).  
+   - A line is defined by `(x1, y1) -> (x2, y2)`, stored in the `calibrations` table.
 
-1. Clone or pull this repository to your local machine.
-2. Create and activate a Python environment:
-   conda create --name zvision python=3.9
-   conda activate zvision
-3. Install required dependencies (FastAPI, uvicorn, opencv-python, ultralytics, etc.):
-   pip install -r requirements.txt
-4. Verify your installation:
-   python --version
-   pip list
+4. **Events (entry_exit_events)**  
+   - Whenever the pipeline detects an object crossing the calibration line, it logs an event with `event_type = "entry"` or `"exit"`.  
+   - Each row references the `store_id`, plus optional fields like `clip_path` and `timestamp`.
 
----
+## Project Structure
 
-## 2. Running the FastAPI Server
+- `app/`
+  - `main.py`  
+    - FastAPI server entry point  
+    - Routers for camera, logs, events, and a calibration route
+    - Optionally processes local videos before starting the server
+  - `database/`  
+    - `connection.py`: DB path and `get_connection()`  
+    - `stores.py`, `cameras.py`, `calibration.py`, `events.py`: separate files for each table  
+      - `initialize_*_table()` functions  
+      - CRUD methods (add_store, add_camera, store_calibration, add_event, etc.)  
+  - `inference/`  
+    - `detection.py`: runs YOLO model inference on frames  
+    - `crossing.py`: line-crossing logic (sign test, naive matching)  
+    - `pipeline.py`: orchestrates reading frames, calling detection, applying calibration, and logging events  
+  - `routes/`  
+    - optional separate route files (camera.py, logs.py, events.py, calibration.py)
 
-1. **Navigate** to the project’s root folder (where `app/main.py` is accessible).
-2. **Launch the server**:
-   uvicorn app.main:app --reload
-3. **Test** the health-check endpoint:
-   - Open your browser at http://127.0.0.1:8000/ping
-   - You should see: {"status": "ok"}
+## Setup Steps
 
-**Endpoints**:
-- /detect (placeholder for future YOLO detection)
-- /calibrate (placeholder for boundary/line calibration)
-- /events (POST event data)
-- /logs (GET logs by store_id, date range, etc.)
+1. **Create & Activate a Python Environment**  
+    - `conda create --name zvision python=3.9 conda activate zvision`
 
----
+2. **Install Dependencies**
+    - `pip install fastapi uvicorn opencv-python ultralytics pydantic`
+  
+3. **Run Database Initialization**  
+    - The code calls `initialize_db()` in `main.py`, or you can run a script (e.g., `reset_db.py`) to drop & recreate tables if needed.
 
-## 3. Annotating Video with YOLO
+4. **Start the Server**
+    - `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`
+    - Check `http://127.0.0.1:8000/api/ping` returns `{"status":"ok"}`.
 
-Our main detection/annotation pipeline lives in `app/counter.py`. It can:
-- Process files from `videos/source/`
-- Generate annotated videos into `videos/annotated/`
-- Prompt you whether to replace or ignore existing files
+5. **Flutter Front-End (Optional)**  
+- A minimal calibration screen calls `GET /api/camera/{camera_id}/snapshot` for a snapshot.  
+- Then posts line coordinates to `POST /api/calibrate`, referencing `camera_id`.
 
-**Steps**:
-1. Place your raw videos in `videos/source`.
-2. From the project’s root directory:
-   python app/counter.py
-3. The script scans `videos/source/`, and for each file:
-   - Creates an annotated version in `videos/annotated/<filename>_annotated.mp4`
-   - If a file already exists, it asks you to replace or ignore
-4. The script logs frames processed, detections, and approximate FPS.
+## Workflows
 
----
+1. **Add a Store**  
+- `store_id` auto-increment. Example name: "My First Store."
+2. **Add a Camera**  
+- referencing store_id. e.g., (store_id=1, camera_name="Front Door Cam").
+3. **Calibrate**  
+- Post to `/api/calibrate` with `camera_id` (as integer) and line coords.  
+- DB updates the `calibrations` table for that camera.
+4. **Detection**  
+- The pipeline (`process_camera_stream`) fetches line_data from `calibrations`, runs YOLO detection, checks crossing.  
+- If crossing is detected, it increments in-memory counters or logs an event (`add_event()`).
+5. **Logs & Analytics**  
+- `entry_exit_events` can store each crossing with a timestamp and clip_path, so you can do daily/hourly analytics later.
 
-## 4. Switching to NCNN (Optional)
-- If you have an NCNN YOLO model, use the scripts under `app/counter_ncnn.py` or your own version in `ncnn_model.py`.
-- Adapt the code to load your .param / .bin files and handle bounding-box drawing.
+## Future Enhancements
 
----
+- **Multiple Lines** per camera if needed (remove UNIQUE constraint on `camera_id`).  
+- **Object ID Tracking** for more accurate crossing detection.  
+- **Offline / FIFO Clip** logic to manage disk usage.  
+- **Analytics Endpoints** (daily/hourly grouping, peak times, etc.).  
+- **Refined Flutter UI** to show real-time traffic or event logs.
 
-## 5. Database & Logs
-- SQLite DB is in `app/zvision.db`.
-- `database.py` includes functions to create tables, insert events, and fetch logs.
-- `GET /logs` from the FastAPI server can filter logs by store, date, or event type.
+## Conclusion
 
----
+With this setup, you can:
 
-## 6. Troubleshooting
-- **HTTP 404** when pinging? Ensure your route matches and you’re not mixing /api/ prefixes.
-- **Blue screen or crash** during YOLO? Lower resolution or force CPU (`use_cpu=True`) in `counter.py`.
-- **Permission errors** when writing to `videos/annotated/`? Check folder permissions or run as admin.
-
----
-
-## 7. Next Steps
-- Implement calibration UI or logic (entry/exit lines) via /calibrate.
-- Add advanced analytics (daily/hourly counts) in `database.py`, create new endpoints for them.
-- Possibly integrate a **Flutter** or web front-end to visualize real-time footfall analytics.
-
----
-
-## 8. Contributing
-1. Make a new branch for your feature or fix.
-2. Commit changes with clear messages.
-3. Push to GitHub and create a Pull Request.
-
-For **SSH** key usage: ensure your GitHub remote is set to git@github.com:username/zvision.git and you have an SSH key added to your GitHub account.
-
----
-
-## 9. License
-This project is primarily for demonstration/educational purposes. Check the code for any third-party licenses.
+1. Manage multiple stores, each with multiple cameras.  
+2. Store calibration lines in the DB for each camera.  
+3. Use a YOLO pipeline to detect bounding boxes, determine line crossings, and log entry/exit events for store analytics.  
