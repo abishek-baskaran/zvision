@@ -3,7 +3,8 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 
-from app.database import add_event, get_all_stores
+from app.database.events import add_event
+from app.database.stores import get_all_stores
 
 router = APIRouter()
 

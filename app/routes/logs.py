@@ -2,7 +2,7 @@ from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
 from datetime import datetime
 
-from app.database import get_events_for_store
+from app.database.events import get_events_for_store
 
 router = APIRouter()
 
