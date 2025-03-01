@@ -1,0 +1,8 @@
+deepsparse
+fastapi
+numpy
+opencv-python
+pydantic
+psutil
+ultralytics
+uvicorn
