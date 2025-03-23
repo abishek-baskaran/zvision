@@ -1,12 +1,9 @@
-# app/inference/detection.py
-
 import cv2
 import numpy as np
 from ultralytics import YOLO
 
-# Initialize the YOLO model once (or in a factory method) 
-# Replace "yolov8l.pt" with your actual model path
-_yolo_model = YOLO("yolov8l.pt")
+# Initialize YOLO model with verbose=False to disable debug prints
+_yolo_model = YOLO("./checkpoints/yolov8n.pt")
 
 def run_yolo_inference(frame):
     """
@@ -15,7 +12,8 @@ def run_yolo_inference(frame):
     scores -> [ s1, s2, ... ]
     labels -> [ l1, l2, ... ]
     """
-    results = _yolo_model.predict(source=frame)
+    # Set verbose=False to disable YOLO's verbose output
+    results = _yolo_model.predict(source=frame, classes=[0], verbose=False)
     yolo_result = results[0]
 
     xyxy = yolo_result.boxes.xyxy.cpu().numpy()  # shape: (num_det, 4)

@@ -1,4 +1,4 @@
-from app.database import (
+from database import (
     initialize_db,
     stores,
     cameras,

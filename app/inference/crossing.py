@@ -1,5 +1,3 @@
-# app/inference/crossing.py
-
 from typing import List, Tuple, Dict
 from datetime import datetime
 from app.database.cameras import get_store_for_camera
@@ -38,12 +36,14 @@ def find_closest_center(cx: float, cy: float, old_centers: List[Tuple[float, flo
     return best_center
 
 def check_line_crossings(
-    this_frame_centers, old_centers, line_data, entry_count, exit_count, camera_id_int
+    this_frame_centers, old_centers, line_data, entry_count, exit_count, camera_id_int, orientation="leftToRight"
 ):
     """
     Compare new centers to old centers, checking if side changed across the line.
     Return updated (entry_count, exit_count).
     Additionally, log the crossing event to the DB if desired.
+    
+    orientation: "leftToRight" or "rightToLeft" - changes which direction is considered entry vs exit
     """
 
     if not old_centers:
@@ -74,12 +74,27 @@ def check_line_crossings(
         if old_side != 0 and new_side != 0 and old_side != new_side:
             # crossing occurred
             event_type = None
-            if old_side < 0 and new_side > 0:
-                exit_count += 1
-                event_type = "exit"
-            elif old_side > 0 and new_side < 0:
-                entry_count += 1
-                event_type = "entry"
+            
+            # Default orientation (leftToRight):
+            # - going from +1 to -1 means entry
+            # - going from -1 to +1 means exit
+            if orientation == "leftToRight":
+                if old_side < 0 and new_side > 0:
+                    exit_count += 1
+                    event_type = "exit"
+                elif old_side > 0 and new_side < 0:
+                    entry_count += 1
+                    event_type = "entry"
+            # Reversed orientation (rightToLeft):
+            # - going from +1 to -1 means exit
+            # - going from -1 to +1 means entry
+            elif orientation == "rightToLeft":
+                if old_side < 0 and new_side > 0:
+                    entry_count += 1
+                    event_type = "entry"
+                elif old_side > 0 and new_side < 0:
+                    exit_count += 1
+                    event_type = "exit"
 
             # If store_id was found, log the event
             if store_id and event_type:
