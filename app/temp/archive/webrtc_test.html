@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZVision WebRTC Camera Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #stopButton {
+            background-color: #f44336;
+        }
+        #stopButton:hover {
+            background-color: #d32f2f;
+        }
+        #videoContainer {
+            margin-top: 20px;
+            width: 100%;
+            background-color: #000;
+            position: relative;
+        }
+        #video {
+            width: 100%;
+            display: block;
+        }
+        .status {
+            color: #666;
+            font-style: italic;
+            margin-top: 10px;
+        }
+        #logContainer {
+            margin-top: 20px;
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 12px;
+            background-color: #f9f9f9;
+        }
+        .log-info {
+            color: #333;
+        }
+        .log-error {
+            color: #d32f2f;
+        }
+        .log-success {
+            color: #2e7d32;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ZVision WebRTC Camera Test</h1>
+        
+        <div class="form-group">
+            <label for="apiUrl">API URL:</label>
+            <input type="text" id="apiUrl" value="http://localhost:8000" placeholder="http://localhost:8000">
+        </div>
+        
+        <div class="form-group">
+            <label for="cameraId">Camera ID:</label>
+            <input type="number" id="cameraId" value="1" min="1">
+        </div>
+        
+        <div class="form-group">
+            <label for="username">Username:</label>
+            <input type="text" id="username" value="admin">
+        </div>
+        
+        <div class="form-group">
+            <label for="password">Password:</label>
+            <input type="password" id="password" value="admin">
+        </div>
+        
+        <div class="form-group">
+            <button id="startButton">Start Stream</button>
+            <button id="stopButton" disabled>Stop Stream</button>
+        </div>
+        
+        <div id="videoContainer">
+            <video id="video" autoplay playsinline></video>
+            <p id="status" class="status">Ready to connect</p>
+        </div>
+        
+        <h3>Connection Log</h3>
+        <div id="logContainer"></div>
+    </div>
+
+    <script>
+        // Configuration variables
+        let apiUrl = '';
+        let cameraId = 1;
+        let token = null;
+        let username = '';
+        let password = '';
+        
+        // WebRTC variables
+        let peerConnection = null;
+        let connectionId = null;
+        
+        // DOM elements
+        const apiUrlInput = document.getElementById('apiUrl');
+        const cameraIdInput = document.getElementById('cameraId');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const videoElement = document.getElementById('video');
+        const statusElement = document.getElementById('status');
+        const logContainer = document.getElementById('logContainer');
+        
+        // Initialize from inputs
+        function initializeValues() {
+            apiUrl = apiUrlInput.value.trim();
+            cameraId = parseInt(cameraIdInput.value);
+            username = usernameInput.value;
+            password = passwordInput.value;
+        }
+        
+        // Logging function
+        function log(message, type = 'info') {
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-${type}`;
+            logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logContainer.appendChild(logEntry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+            console.log(message);
+        }
+        
+        // Get authentication token
+        async function getToken() {
+            try {
+                const response = await fetch(`${apiUrl}/api/token`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Authentication failed: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                token = data.access_token;
+                log('Successfully authenticated', 'success');
+                return true;
+            } catch (error) {
+                log(`Authentication error: ${error.message}`, 'error');
+                return false;
+            }
+        }
+        
+        // Create and setup WebRTC peer connection
+        function createPeerConnection() {
+            const configuration = {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' }
+                ]
+            };
+            
+            peerConnection = new RTCPeerConnection(configuration);
+            
+            peerConnection.onicecandidate = ({candidate}) => {
+                if (candidate && connectionId) {
+                    sendIceCandidate(candidate);
+                }
+            };
+            
+            peerConnection.ontrack = (event) => {
+                log('Received remote track', 'success');
+                if (videoElement.srcObject !== event.streams[0]) {
+                    videoElement.srcObject = event.streams[0];
+                    log('Connected to camera stream', 'success');
+                    statusElement.textContent = 'Connected - Streaming';
+                }
+            };
+            
+            peerConnection.oniceconnectionstatechange = () => {
+                log(`ICE connection state: ${peerConnection.iceConnectionState}`);
+                
+                if (peerConnection.iceConnectionState === 'failed' || 
+                    peerConnection.iceConnectionState === 'disconnected' || 
+                    peerConnection.iceConnectionState === 'closed') {
+                    statusElement.textContent = `Connection ${peerConnection.iceConnectionState}`;
+                }
+            };
+            
+            peerConnection.onsignalingstatechange = () => {
+                log(`Signaling state: ${peerConnection.signalingState}`);
+            };
+            
+            peerConnection.onconnectionstatechange = () => {
+                log(`Connection state: ${peerConnection.connectionState}`);
+                
+                if (peerConnection.connectionState === 'connected') {
+                    statusElement.textContent = 'Connected - Streaming';
+                }
+            };
+            
+            return peerConnection;
+        }
+        
+        // Send WebRTC offer to server
+        async function sendOffer(offer) {
+            try {
+                log('Sending WebRTC offer to server...');
+                
+                const response = await fetch(`${apiUrl}/api/rtc/offer/${cameraId}?token=${token}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(offer)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Server rejected offer: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                connectionId = data.connection_id;
+                log(`Received connection ID: ${connectionId}`, 'success');
+                
+                return connectionId;
+            } catch (error) {
+                log(`Error sending offer: ${error.message}`, 'error');
+                return null;
+            }
+        }
+        
+        // Get WebRTC answer from server
+        async function getAnswer() {
+            try {
+                log('Getting WebRTC answer from server...');
+                
+                const response = await fetch(`${apiUrl}/api/rtc/answer/${connectionId}?token=${token}`);
+                
+                if (response.status === 202) {
+                    // Answer not yet available, retry after a short delay
+                    log('Answer not ready yet, retrying...');
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    return await getAnswer();
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to get answer: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                log('Received WebRTC answer from server', 'success');
+                
+                return data.answer;
+            } catch (error) {
+                log(`Error getting answer: ${error.message}`, 'error');
+                return null;
+            }
+        }
+        
+        // Send ICE candidate to server
+        async function sendIceCandidate(candidate) {
+            try {
+                const response = await fetch(`${apiUrl}/api/rtc/ice-candidate/${connectionId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        candidate: candidate
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to send ICE candidate: ${response.status}`);
+                }
+                
+                log('Sent ICE candidate to server');
+            } catch (error) {
+                log(`Error sending ICE candidate: ${error.message}`, 'error');
+            }
+        }
+        
+        // Start WebRTC connection
+        async function startStream() {
+            initializeValues();
+            
+            // Disable start button during connection
+            startButton.disabled = true;
+            statusElement.textContent = 'Connecting...';
+            log('Starting connection...');
+            
+            // Get auth token
+            const authenticated = await getToken();
+            if (!authenticated) {
+                startButton.disabled = false;
+                statusElement.textContent = 'Authentication failed';
+                return;
+            }
+            
+            // Create peer connection
+            peerConnection = createPeerConnection();
+            
+            try {
+                // Create offer
+                const offer = await peerConnection.createOffer({
+                    offerToReceiveVideo: true,
+                    offerToReceiveAudio: false,
+                });
+                
+                // Set local description
+                await peerConnection.setLocalDescription(offer);
+                log('Created offer and set local description');
+                
+                // Send offer to server
+                connectionId = await sendOffer({
+                    type: offer.type,
+                    sdp: offer.sdp
+                });
+                
+                if (!connectionId) {
+                    throw new Error('Failed to get connection ID from server');
+                }
+                
+                // Get answer from server
+                const answer = await getAnswer();
+                if (!answer) {
+                    throw new Error('Failed to get answer from server');
+                }
+                
+                // Set remote description
+                await peerConnection.setRemoteDescription({
+                    type: answer.type,
+                    sdp: answer.sdp
+                });
+                
+                log('Set remote description from server answer', 'success');
+                statusElement.textContent = 'Waiting for media...';
+                
+                // Enable stop button
+                stopButton.disabled = false;
+            } catch (error) {
+                log(`Connection error: ${error.message}`, 'error');
+                statusElement.textContent = 'Connection failed';
+                startButton.disabled = false;
+                closePeerConnection();
+            }
+        }
+        
+        // Stop WebRTC connection
+        function stopStream() {
+            log('Stopping stream...');
+            closePeerConnection();
+            
+            // Reset UI
+            videoElement.srcObject = null;
+            statusElement.textContent = 'Disconnected';
+            startButton.disabled = false;
+            stopButton.disabled = true;
+        }
+        
+        // Close peer connection and clean up
+        function closePeerConnection() {
+            if (peerConnection) {
+                peerConnection.ontrack = null;
+                peerConnection.onicecandidate = null;
+                peerConnection.oniceconnectionstatechange = null;
+                peerConnection.onsignalingstatechange = null;
+                peerConnection.onconnectionstatechange = null;
+                
+                peerConnection.close();
+                peerConnection = null;
+                log('Peer connection closed');
+            }
+            
+            connectionId = null;
+        }
+        
+        // Event listeners
+        startButton.addEventListener('click', startStream);
+        stopButton.addEventListener('click', stopStream);
+        
+        // Initial log
+        log('WebRTC test page loaded. Ready to connect.', 'info');
+    </script>
+</body>
+</html> 

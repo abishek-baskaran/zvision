@@ -34,6 +34,15 @@ class DetectionWSResponse(BaseModel):
     target_fps: Optional[float] = None
     hardware_limited: Optional[bool] = None
 
+# New response model for detection-only data
+class DetectionOnlyResponse(BaseModel):
+    camera_id: int
+    timestamp: str
+    detections: List[Dict[str, Any]]
+    event: Optional[str] = None
+    status: str = "no_motion"
+    crossing_detected: bool = False
+
 # Verify token similar to get_current_user but for WebSockets
 async def verify_token(token: str) -> Optional[dict]:
     try:
@@ -689,3 +698,482 @@ async def multiple_detections(
                 active_connections[cam_id].remove(websocket)
                 if not active_connections[cam_id]:
                     del active_connections[cam_id] 
+
+# Add a new WebSocket endpoint for detection data only (for use with WebRTC video)
+@router.websocket("/ws/detection-data/{camera_id}")
+async def detection_data_only(
+    websocket: WebSocket, 
+    camera_id: int, 
+    token: Optional[str] = Query(None),
+    frame_rate: Optional[int] = Query(None)
+):
+    """
+    WebSocket endpoint for detection data only, without video frames.
+    To be used in conjunction with WebRTC video streaming.
+    Requires a valid JWT token as a query parameter.
+    """
+    # Verify the token
+    if not token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing authentication token")
+        return
+        
+    user = await verify_token(token)
+    if not user:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid authentication token")
+        return
+    
+    # Verify the camera exists
+    camera = get_camera_by_id(camera_id)
+    if not camera:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=f"Camera with ID {camera_id} not found")
+        return
+    
+    # Accept the connection
+    await websocket.accept()
+    
+    # Get camera source
+    source_path = _fetch_camera_source_by_id(camera_id)
+    if not source_path:
+        await websocket.send_json({
+            "status": "error",
+            "message": f"Camera source not found for camera_id={camera_id}"
+        })
+        return
+    
+    # Get calibration data to determine frame rate
+    calib_data = fetch_calibration_for_camera(camera_id)
+    
+    # Detection state
+    detection_result = None
+    last_detection_time = 0
+    
+    # Use frame_rate parameter from query if provided, otherwise from calibration
+    if frame_rate is not None:
+        # URL parameter takes precedence
+        configured_frame_rate = frame_rate
+    elif calib_data and "frame_rate" in calib_data:
+        configured_frame_rate = calib_data.get("frame_rate", 5)
+    else:
+        configured_frame_rate = 5  # Default if no other source available
+        
+    # Ensure frame_rate is valid
+    if configured_frame_rate <= 0:
+        configured_frame_rate = 5
+        
+    # Convert frame_rate to detection interval (seconds between detections)
+    detection_interval = 1.0 / configured_frame_rate
+    log_message = f"Using configured frame rate: {configured_frame_rate} FPS (interval: {detection_interval:.3f}s)"
+    
+    print(f"Camera {camera_id}: {log_message} (detection data only)")
+    
+    # Add performance tracking variables
+    detection_count = 0
+    start_time = time.time()
+    
+    # Send initial connection confirmation
+    await websocket.send_json({
+        "status": "connected",
+        "message": f"Connected to detection data stream for camera {camera_id}",
+        "detection_interval": detection_interval
+    })
+    
+    try:
+        # Main detection loop
+        while True:
+            try:
+                loop_start = time.time()
+                
+                # Only run detection periodically based on the frame rate
+                current_time = time.time()
+                if current_time - last_detection_time >= detection_interval:
+                    # Run detection in background (non-blocking)
+                    detection_task = asyncio.create_task(asyncio.to_thread(detect_person_crossing, camera_id))
+                    try:
+                        # Wait with a timeout to avoid blocking
+                        detection_result = await asyncio.wait_for(detection_task, timeout=0.5)
+                        last_detection_time = current_time
+                    except asyncio.TimeoutError:
+                        # Detection is taking too long, continue
+                        print(f"Camera {camera_id}: Detection timeout, skipping...")
+                        await asyncio.sleep(0.1)
+                        continue
+                    
+                    # Format detection results
+                    if detection_result:
+                        # Format the response
+                        timestamp = detection_result.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                        timestamp_iso = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S").isoformat()
+                        
+                        # Format bounding boxes and other detection data
+                        detections = []
+                        event = None
+                        status = "no_motion"
+                        crossing_detected = False
+                        
+                        # Format bounding boxes
+                        for bbox in detection_result.get("bounding_boxes", []):
+                            detections.append({
+                                "label": "person",  # Currently only detecting people
+                                "confidence": 0.9,  # Placeholder
+                                "bbox": bbox
+                            })
+                        
+                        # Check if an event was detected
+                        if "status" in detection_result:
+                            status = detection_result["status"]
+                            if status == "entry_detected":
+                                event = "entry"
+                            elif status == "exit_detected":
+                                event = "exit"
+                            
+                        crossing_detected = detection_result.get("crossing_detected", False)
+                        
+                        # Create detection-only response
+                        response = DetectionOnlyResponse(
+                            camera_id=camera_id,
+                            timestamp=timestamp_iso,
+                            detections=detections,
+                            event=event,
+                            status=status,
+                            crossing_detected=crossing_detected
+                        )
+                        
+                        # Send update to client
+                        await websocket.send_json(response.dict())
+                        
+                        # Track statistics
+                        detection_count += 1
+                        
+                        # Log detection info periodically
+                        if detection_count % 10 == 0:
+                            elapsed = time.time() - start_time
+                            detection_rate = detection_count / elapsed
+                            print(f"Camera {camera_id}: Sent {detection_count} detection updates, rate: {detection_rate:.2f}/s")
+                
+                # Add a small delay to avoid busy-waiting
+                elapsed = time.time() - loop_start
+                sleep_time = max(0, detection_interval - elapsed)
+                await asyncio.sleep(sleep_time)
+                
+            except WebSocketDisconnect:
+                print(f"WebSocket disconnected for camera {camera_id} (detection data)")
+                break
+            except Exception as e:
+                print(f"Error in detection data stream: {str(e)}")
+                await asyncio.sleep(1.0)  # Wait before retrying
+    
+    except WebSocketDisconnect:
+        print(f"WebSocket disconnected for camera {camera_id} (detection data)")
+    except Exception as e:
+        print(f"WebSocket error: {str(e)}")
+    finally:
+        # Log final statistics
+        end_time = time.time()
+        total_duration = end_time - start_time
+        if detection_count > 0:
+            avg_rate = detection_count / total_duration
+            print(f"Camera {camera_id} detection WebSocket closed:")
+            print(f"  - Total detections: {detection_count}, Duration: {total_duration:.2f}s")
+            print(f"  - Average rate: {avg_rate:.2f} detections/s")
+
+# Similar endpoint for multiple cameras could be added here 
+
+@router.websocket("/ws/rtc-video/{camera_id}")
+async def rtc_video_stream(
+    websocket: WebSocket, 
+    camera_id: int, 
+    token: Optional[str] = Query(None),
+    frame_rate: Optional[int] = Query(None)
+):
+    """
+    WebSocket endpoint for real-time video streaming data (no detections)
+    Used as a fallback when WebRTC is not available
+    Requires a valid JWT token as a query parameter
+    """
+    # Verify the token
+    if not token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing authentication token")
+        return
+        
+    user = await verify_token(token)
+    if not user:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid authentication token")
+        return
+    
+    # Verify the camera exists
+    camera = get_camera_by_id(camera_id)
+    if not camera:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=f"Camera with ID {camera_id} not found")
+        return
+    
+    # Accept the connection
+    await websocket.accept()
+    
+    # Get camera source
+    source_path = _fetch_camera_source_by_id(camera_id)
+    if not source_path:
+        await websocket.send_json({
+            "status": "error",
+            "message": f"Camera source not found for camera_id={camera_id}"
+        })
+        return
+
+    # Open video capture
+    cap = cv2.VideoCapture(source_path)
+    if not cap.isOpened():
+        await websocket.send_json({
+            "status": "error",
+            "message": f"Failed to open camera/video source '{source_path}'"
+        })
+        return
+    
+    try:
+        # Send initial connection confirmation
+        await websocket.send_json({
+            "status": "connected",
+            "message": f"Connected to video-only stream for camera {camera_id}"
+        })
+        
+        # Get frame rate (use parameter, calibration, or default)
+        if frame_rate is not None:
+            configured_frame_rate = frame_rate
+        else:
+            calib_data = fetch_calibration_for_camera(camera_id)
+            if calib_data and "frame_rate" in calib_data:
+                configured_frame_rate = calib_data.get("frame_rate", 10)
+            else:
+                configured_frame_rate = 10  # Default to 10 FPS for video-only mode
+            
+        # Ensure frame_rate is valid
+        if configured_frame_rate <= 0:
+            configured_frame_rate = 10
+            
+        # Calculate sleep time between frames
+        frame_interval = 1.0 / configured_frame_rate
+        
+        # Set encoding quality based on frame rate
+        if configured_frame_rate > 15:
+            jpeg_quality = 40
+            max_height = 360
+        elif configured_frame_rate > 8:
+            jpeg_quality = 50
+            max_height = 480
+        else:
+            jpeg_quality = 60
+            max_height = 540
+            
+        # Performance tracking
+        frame_count = 0
+        start_time = time.time()
+        
+        print(f"Camera {camera_id}: Video-only WebSocket connection established, target FPS: {configured_frame_rate}")
+        
+        # Main streaming loop
+        while True:
+            loop_start = time.time()
+            
+            # Read frame
+            ret, frame = cap.read()
+            
+            if not ret or frame is None:
+                # If we're at the end of a video file, try to reopen it
+                cap.release()
+                cap = cv2.VideoCapture(source_path)
+                if not cap.isOpened():
+                    await websocket.send_json({
+                        "status": "error",
+                        "message": f"Failed to reopen video source '{source_path}'"
+                    })
+                    break
+                    
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    await websocket.send_json({
+                        "status": "error",
+                        "message": "Unable to read a frame from the camera/video"
+                    })
+                    break
+            
+            # Make a copy and resize for streaming
+            display_frame = frame.copy()
+            display_frame = _resize_frame(display_frame, max_height=max_height)
+            
+            # Encode frame to JPEG and then base64
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
+            success, encoded_img = cv2.imencode(".jpg", display_frame, encode_params)
+            
+            if not success:
+                await websocket.send_json({
+                    "status": "error",
+                    "message": "Failed to encode frame to JPEG"
+                })
+                continue
+                
+            frame_base64 = base64.b64encode(encoded_img.tobytes()).decode('utf-8')
+            
+            # Calculate actual FPS
+            frame_count += 1
+            elapsed_time = time.time() - start_time
+            
+            if elapsed_time >= 5.0:  # Recalculate every 5 seconds
+                actual_fps = frame_count / elapsed_time
+                hardware_limited = actual_fps < (configured_frame_rate * 0.8)  # If below 80% of target
+                
+                frame_count = 0
+                start_time = time.time()
+            else:
+                actual_fps = None
+                hardware_limited = None
+            
+            # Send frame data
+            timestamp = datetime.now().isoformat()
+            
+            await websocket.send_json({
+                "camera_id": camera_id,
+                "timestamp": timestamp,
+                "frame": frame_base64,
+                "actual_fps": actual_fps,
+                "target_fps": configured_frame_rate,
+                "hardware_limited": hardware_limited
+            })
+            
+            # Calculate sleep time to maintain target frame rate
+            loop_time = time.time() - loop_start
+            sleep_time = max(0, frame_interval - loop_time)
+            
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
+                
+    except WebSocketDisconnect:
+        print(f"Camera {camera_id}: Video-only WebSocket client disconnected")
+    except Exception as e:
+        print(f"Camera {camera_id}: Video-only WebSocket error: {str(e)}")
+    finally:
+        # Clean up resources
+        if cap:
+            cap.release()
+            
+            
+@router.websocket("/ws/rtc-detection-data/{camera_id}")
+async def rtc_detection_data(
+    websocket: WebSocket, 
+    camera_id: int, 
+    token: Optional[str] = Query(None),
+    frame_rate: Optional[int] = Query(None)
+):
+    """
+    WebSocket endpoint for detection data only (to be used with WebRTC video)
+    Requires a valid JWT token as a query parameter
+    """
+    # Verify the token
+    if not token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Missing authentication token")
+        return
+        
+    user = await verify_token(token)
+    if not user:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid authentication token")
+        return
+    
+    # Verify the camera exists
+    camera = get_camera_by_id(camera_id)
+    if not camera:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=f"Camera with ID {camera_id} not found")
+        return
+    
+    # Accept the connection
+    await websocket.accept()
+    
+    try:
+        # Send initial connection confirmation
+        await websocket.send_json({
+            "status": "connected",
+            "message": f"Connected to detection data stream for camera {camera_id}"
+        })
+        
+        # Get frame rate for detection processing (use parameter, calibration, or default)
+        if frame_rate is not None:
+            configured_frame_rate = frame_rate
+        else:
+            calib_data = fetch_calibration_for_camera(camera_id)
+            if calib_data and "frame_rate" in calib_data:
+                configured_frame_rate = calib_data.get("frame_rate", 5)
+            else:
+                configured_frame_rate = 5  # Default to 5 FPS for detections
+            
+        # Ensure frame_rate is valid
+        if configured_frame_rate <= 0:
+            configured_frame_rate = 5
+            
+        # Calculate detection interval
+        detection_interval = 1.0 / configured_frame_rate
+        
+        print(f"Camera {camera_id}: Detection-only WebSocket connection established, target FPS: {configured_frame_rate}")
+        
+        last_detection_time = 0
+        detection_result = None
+        
+        # Main detection loop
+        while True:
+            loop_start = time.time()
+            
+            # Only run detection periodically to improve performance
+            current_time = time.time()
+            if current_time - last_detection_time >= detection_interval:
+                # Run detection
+                detection_task = asyncio.create_task(asyncio.to_thread(detect_person_crossing, camera_id))
+                try:
+                    # Wait with a timeout to avoid blocking
+                    detection_result = await asyncio.wait_for(detection_task, timeout=0.2)
+                    last_detection_time = current_time
+                except asyncio.TimeoutError:
+                    # Detection is taking too long, continue
+                    pass
+            
+            # Prepare and send detection data
+            if detection_result:
+                timestamp = detection_result.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                timestamp_iso = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S").isoformat()
+                
+                # Format detection data
+                detections = []
+                event = None
+                status = "no_motion"
+                crossing_detected = False
+                
+                if "detections" in detection_result:
+                    detections = detection_result["detections"]
+                
+                if "event" in detection_result:
+                    event = detection_result["event"]
+                    
+                if "status" in detection_result:
+                    status = detection_result["status"]
+                    
+                if "crossing_detected" in detection_result:
+                    crossing_detected = detection_result["crossing_detected"]
+                
+                # Send detection data
+                await websocket.send_json(DetectionOnlyResponse(
+                    camera_id=camera_id,
+                    timestamp=timestamp_iso,
+                    detections=detections,
+                    event=event,
+                    status=status,
+                    crossing_detected=crossing_detected
+                ).dict())
+                
+            # Calculate sleep time for target frame rate
+            loop_time = time.time() - loop_start
+            sleep_time = max(0, detection_interval - loop_time)
+            
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
+            else:
+                # Let other tasks run if we're behind
+                await asyncio.sleep(0.01)
+                
+    except WebSocketDisconnect:
+        print(f"Camera {camera_id}: Detection-only WebSocket client disconnected")
+    except Exception as e:
+        print(f"Camera {camera_id}: Detection-only WebSocket error: {str(e)}") 

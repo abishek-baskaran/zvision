@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from app.routes import logs, events, camera, calibration, detection, stores, auth, websockets
+from app.routes import logs, events, camera, calibration, detection, stores, auth, websockets, webrtc
 from app.database import initialize_db
 import os
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,6 +40,7 @@ app.include_router(events.router, prefix="/api", tags=["events"])
 app.include_router(calibration.router, prefix="/api", tags=["calibration"])
 app.include_router(detection.router, prefix="/api", tags=["detection"])
 app.include_router(websockets.router, prefix="/api", tags=["websockets"])  # Add /api prefix to match frontend requests
+app.include_router(webrtc.router, prefix="/api", tags=["rtc"])  # Add WebRTC router
 
 @app.get("/api/ping")
 def read_ping():

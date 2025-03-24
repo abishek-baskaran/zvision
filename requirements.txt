@@ -4,6 +4,14 @@ opencv-python
 pydantic
 psutil
 ultralytics
-uvicorn
+uvicorn[standard]
 bcrypt
 python-multipart
+websockets
+
+# WebRTC dependencies
+aiortc
+aiohttp
+av
+pyee==9.0.4
+python-jose

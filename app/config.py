@@ -40,6 +40,9 @@ else:
         "http://127.0.0.1:8000",     # Local FastAPI server (IP version)
         "http://192.168.31.36:8080", # Your desktop's network IP
         "http://192.168.31.36:8081", # Your desktop's network IP
+        "http://192.168.31.37:8080", # Raspberry Pi's IP address
+        "http://192.168.31.37:8000", # Raspberry Pi's API server
+        "*",                         # Allow all origins during testing
     ]
 
 # Static files configuration

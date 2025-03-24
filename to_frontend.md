@@ -741,7 +741,7 @@ async function setCalibrationWithOrientation(cameraId, calibrationData) {
     throw error;
   }
 }
-``` 
+```
 
 ## Frame Rate in Calibration
 
@@ -1078,106 +1078,6 @@ async function getCameraLogs(cameraId, options = {}) {
 4. The timestamp in logs is stored in "YYYY-MM-DD HH:MM:SS" format, but an ISO-formatted version is also provided for convenience.
 5. For filtering logs by date, use the "YYYY-MM-DD" format (e.g., "2024-03-21"). 
 
-## Live Detection API Clarification (404 Error Fix)
-
-### Issue
-
-The frontend is making requests to `/api/detection/live/{camera_id}?resolution=low` which is resulting in 404 Not Found errors. This endpoint does not exist in the current backend implementation.
-
-### Correct Endpoints for Detection
-
-The backend provides the following detection endpoints:
-
-1. **On-Demand Detection**: `POST /api/detect` (with camera_id parameter)
-2. **Detection Configuration**: `POST /api/detection/config` (for setting up intervals)
-
-There is no `/api/detection/live/{camera_id}` endpoint currently implemented.
-
-### How to Fix Frontend Requests
-
-To get detection results, please use the on-demand detection endpoint:
-
-```javascript
-// Instead of:
-// fetch(`${API_BASE}/api/detection/live/${cameraId}?resolution=low`)
-
-// Use this:
-async function getDetectionResults(cameraId) {
-  const response = await fetch(`${API_BASE}/api/detect?camera_id=${cameraId}`, {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Bearer ' + jwtToken
-    }
-  });
-  
-  if (!response.ok) {
-    throw new Error(`Failed to get detection results: ${response.status}`);
-  }
-  
-  return await response.json();
-}
-```
-
-### Implementation Options
-
-You have two options for implementing live detection:
-
-1. **Polling Approach**: Call the `/api/detect` endpoint at regular intervals with `setInterval`
-   ```javascript
-   // Example polling implementation
-   function startLiveDetection(cameraId, intervalMs = 2000) {
-     const intervalId = setInterval(async () => {
-       try {
-         const results = await getDetectionResults(cameraId);
-         // Update UI with detection results
-         updateDetectionDisplay(results);
-       } catch (error) {
-         console.error('Detection error:', error);
-       }
-     }, intervalMs);
-     
-     // Return interval ID so it can be cleared later
-     return intervalId;
-   }
-   
-   // To stop live detection
-   function stopLiveDetection(intervalId) {
-     clearInterval(intervalId);
-   }
-   ```
-
-2. **Use Detection Configuration**: Set up automatic detection using the config endpoint
-   ```javascript
-   async function configureAutomaticDetection(cameraId, intervalSeconds = 5) {
-     const response = await fetch(`${API_BASE}/api/detection/config`, {
-       method: 'POST',
-       headers: {
-         'Authorization': 'Bearer ' + jwtToken,
-         'Content-Type': 'application/json'
-       },
-       body: JSON.stringify({
-         camera_id: cameraId,
-         interval_seconds: intervalSeconds,
-         enabled: true
-       })
-     });
-     
-     if (!response.ok) {
-       throw new Error(`Failed to configure detection: ${response.status}`);
-     }
-     
-     return await response.json();
-   }
-   ```
-
-### Resolution Parameter
-
-The current detection endpoints do not support a `resolution` parameter. If you need to specify different resolutions for detection, this would need to be implemented in the backend.
-
-### Next Steps
-
-If real-time streaming of detection results with bounding boxes is required, a WebSocket-based implementation would be more efficient. Please discuss with the backend team if this feature is needed. 
-
 ## WebSocket-Based Live Detection
 
 Instead of polling the `/api/detect` endpoint for real-time detection results, we've added a WebSocket-based solution that provides continuous video streaming with real-time detection results.
@@ -1418,204 +1318,6 @@ function setupLiveVideoDetection(cameraId) {
 }
 ```
 
-### HTML Structure Example
-
-```html
-<div class="video-container">
-  <img id="video-display" src="" alt="Video Feed">
-  <canvas id="detection-overlay"></canvas>
-  <div id="event-display"></div>
-  <div class="counters">
-    <div>Entries: <span id="entry-counter">0</span></div>
-    <div>Exits: <span id="exit-counter">0</span></div>
-  </div>
-</div>
-
-<script>
-  // Initialize the live video detection when page loads
-  document.addEventListener('DOMContentLoaded', () => {
-    const cameraId = 1; // Use the appropriate camera ID
-    const cleanup = setupLiveVideoDetection(cameraId);
-    
-    // Clean up WebSocket on page unload
-    window.addEventListener('beforeunload', cleanup);
-  });
-</script>
-```
-
-### Performance Considerations
-
-- WebSocket updates are sent at approximately 10 frames per second
-- Each message includes a complete JPEG frame as base64-encoded string
-- Consider limiting the canvas size for better performance on low-end devices
-- For multiple cameras, updates are sent in sequence with a short delay between cameras
-
-### Handling Disconnections
-
-It's important to handle unexpected disconnections and reconnect:
-
-```javascript
-let socket;
-let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 5;
-
-function connectVideoWebSocket() {
-  const cameraId = 1;
-  const token = localStorage.getItem('token');
-  
-  socket = new WebSocket(`ws://${API_HOST}/api/ws/live-detections/${cameraId}?token=${token}`);
-  
-  socket.onopen = (event) => {
-    console.log('Connected to video WebSocket');
-    reconnectAttempts = 0; // Reset counter on successful connection
-  };
-  
-  socket.onclose = (event) => {
-    if (event.code !== 1000 && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-      console.log(`Connection closed, attempting to reconnect (${reconnectAttempts + 1}/${MAX_RECONNECT_ATTEMPTS})...`);
-      reconnectAttempts++;
-      
-      // Exponential backoff for reconnect
-      const delay = Math.min(1000 * (2 ** reconnectAttempts), 30000);
-      setTimeout(connectVideoWebSocket, delay);
-    }
-  };
-  
-  // Other event handlers
-  // ...
-}
-
-// Initialize connection
-connectVideoWebSocket();
-```
-
-## Updated WebSocket Implementation with Frame Rate Control
-
-We've updated the WebSocket-based live detection system to utilize the `frame_rate` parameter from calibration settings. This allows for fine-grained control over detection frequency without sacrificing video streaming performance.
-
-### How Frame Rate Is Used
-
-The `frame_rate` parameter in calibration settings (configurable from 1-30 FPS) now directly controls:
-
-1. How frequently detection processing runs on the server (conserving CPU resources)
-2. The responsiveness of entry/exit detection
-
-Higher frame rates (e.g., 15-30 FPS) provide more responsive detection but consume more server resources. Lower frame rates (e.g., 1-5 FPS) conserve resources but may miss very rapid movements.
-
-### Implementation Details
-
-The WebSocket system now:
-- Retrieves the `frame_rate` value from camera calibration when a connection is established
-- Calculates a detection interval (seconds between detections) based on frame_rate
-- Continues streaming video frames at a high frame rate (15-20 FPS) for smooth playback
-- Runs detection processing only at the specified interval
-
-### Client-Side Implementation
-
-You should maintain your existing WebSocket implementation with the following considerations:
-
-```javascript
-// Example WebSocket setup with frame rate awareness
-function setupWebSocketWithFrameRate(cameraId) {
-  const token = localStorage.getItem('token');
-  const socket = new WebSocket(`ws://${API_HOST}/api/ws/live-detections/${cameraId}?token=${token}`);
-  
-  // Track framerate-related metrics client-side
-  let lastDetectionTime = 0;
-  let detectionCount = 0;
-  let actualDetectionRate = 0;
-  
-  socket.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    
-    // Skip connection messages
-    if (data.status === 'connected') {
-      console.log('WebSocket connected:', data.message);
-      return;
-    }
-    
-    // Process video frame
-    if (data.frame) {
-      updateVideoFrame(data.frame);
-      
-      // Check if this message contains detection results (may not be present in every frame)
-      if (data.detections && data.detections.length > 0) {
-        // Calculate actual detection rate
-        const now = Date.now();
-        if (lastDetectionTime > 0) {
-          const elapsed = (now - lastDetectionTime) / 1000;
-          
-          // Update rolling average of detection rate
-          actualDetectionRate = detectionCount > 0 
-            ? (actualDetectionRate * 0.8) + (1 / elapsed * 0.2)
-            : 1 / elapsed;
-          
-          console.log(`Current detection rate: ${actualDetectionRate.toFixed(1)} FPS`);
-        }
-        
-        lastDetectionTime = now;
-        detectionCount++;
-        
-        // Process detections
-        drawBoundingBoxes(data.detections);
-      }
-      
-      // Handle crossing events
-      if (data.crossing_detected && data.event) {
-        handleCrossingEvent(data.event, data.timestamp);
-      }
-    }
-  };
-  
-  // Error and close handling
-  socket.onerror = (error) => {
-    console.error('WebSocket error:', error);
-  };
-  
-  socket.onclose = (event) => {
-    console.log(`WebSocket connection closed: ${event.code}`);
-  };
-  
-  return socket;
-}
-```
-
-### Calibration UI for Frame Rate
-
-When implementing the calibration UI, ensure the frame rate control is prominently displayed and easy to adjust:
-
-```html
-<div class="calibration-settings">
-  <h3>Detection Settings</h3>
-  
-  <!-- Frame Rate Slider -->
-  <div class="form-group">
-    <label for="frame-rate-slider">
-      Detection Frame Rate: <span id="frame-rate-value">5</span> FPS
-    </label>
-    <input 
-      type="range" 
-      id="frame-rate-slider" 
-      min="1" 
-      max="30" 
-      value="5" 
-      class="form-control-range"
-      oninput="updateFrameRateValue(this.value)"
-    >
-    <small class="form-text text-muted">
-      Lower values (1-5 FPS) reduce CPU usage but may miss quick movements.<br>
-      Higher values (15-30 FPS) provide more responsive detection but increase CPU usage.
-    </small>
-  </div>
-  
-  <script>
-    function updateFrameRateValue(value) {
-      document.getElementById('frame-rate-value').textContent = value;
-    }
-  </script>
-</div>
-```
-
 ### Performance Considerations
 
 1. **Server-side adaptive processing**: 
@@ -1707,7 +1409,7 @@ Our testing shows that the Raspberry Pi hardware has performance limitations tha
      }
      
      // Display the video frame
-     updateVideoDisplay(data.frame, data.detections);
+     updateVideoFrame(data.frame, data.detections);
    };
    ```
 
@@ -1749,195 +1451,714 @@ Our testing shows that the Raspberry Pi hardware has performance limitations tha
 
 By leveraging these new features, your frontend can adapt to the hardware capabilities of the Raspberry Pi while providing the best possible user experience.
 
-## Additional Missing Endpoints (404 Errors)
+## WebRTC + WebSocket Hybrid Implementation
 
-We've noticed several 404 errors in the server logs for endpoints that don't exist in the current API implementation:
+A new hybrid approach is now available that combines the benefits of WebRTC for video streaming and WebSockets for detection data. This approach can significantly improve performance, especially for higher frame rates.
 
-### 1. Subscription API
+### How It Works
 
-**Issue**: `GET /api/subscription` - 404 Not Found
+1. **WebRTC for Video Streaming**:
+   - Uses browser's native WebRTC capabilities for efficient video streaming
+   - Handles the video transport only, with lower latency than WebSockets
+   - Better browser support for video playback optimization
 
-This endpoint is not implemented in the current version of the API. If you need subscription information, please contact the backend team to implement this feature.
+2. **WebSockets for Detection Data**:
+   - A separate lightweight WebSocket connection sends only detection data
+   - Includes bounding boxes, event information, and detection status
+   - Much lower bandwidth requirements than sending frames
 
-### 2. Analytics API
+### API Endpoints
 
-**Issues**:
-- `GET /api/analytics/historical/1?start=2025-03-20&end=2025-03-21` - 404 Not Found
-- `GET /api/analytics/summary?storeId=1&range=daily` - 404 Not Found
+#### WebRTC Signaling
 
-These analytics endpoints are not currently implemented. To get historical entry/exit data, please use the logs API:
+1. **WebRTC Signaling WebSocket**:
+   ```
+   ws://${API_HOST}/api/ws/rtc-signaling/{camera_id}?token=${token}
+   ```
+   This WebSocket handles the WebRTC connection setup (SDP exchange and ICE candidates).
+
+2. **HTTP REST Endpoints** (alternative to WebSocket signaling):
+   ```
+   POST /api/rtc/offer/{camera_id}?token=${token}
+   GET /api/rtc/answer/{connection_id}?token=${token}
+   POST /api/rtc/ice-candidate/{connection_id}?token=${token}
+   GET /api/rtc/ice-candidates/{connection_id}?token=${token}
+   ```
+
+#### Detection Data WebSocket
+
+```
+ws://${API_HOST}/api/ws/detection-data/{camera_id}?token=${token}&frame_rate=${frame_rate}
+```
+
+This WebSocket provides only detection data, with the same frame_rate control as the original WebSocket implementation.
+
+### Implementation Example
+
+Check out the sample implementation at:
+```
+/api/temp/webrtc_hybrid_test.html
+```
+
+This demonstration page shows how to:
+1. Set up the WebRTC connection using the signaling WebSocket
+2. Establish a separate detection data WebSocket
+3. Draw bounding boxes on top of the WebRTC video stream
+4. Handle reconnection and error scenarios
+
+### Benefits
+
+1. **Performance**:
+   - Higher achievable frame rates with lower CPU/network usage
+   - More efficient video codec handling (H.264) by the browser
+   - Reduced server load by separating video and detection processing
+
+2. **Scalability**:
+   - Better support for multiple camera views
+   - More efficient bandwidth utilization
+   - Lower latency for live video
+
+3. **User Experience**:
+   - Smoother video playback
+   - More responsive detection overlays
+   - Better mobile device performance
+
+### Implementation Considerations
+
+When implementing this hybrid approach:
+
+1. **Error Handling**:
+   - Implement robust reconnection logic for both WebRTC and WebSocket
+   - Handle cases where one connection is working but the other isn't
+   - Provide clear status indicators to users
+
+2. **Synchronization**:
+   - Ensure detection data and video frames are properly synchronized
+   - Account for possible latency differences between connections
+
+3. **Fallback**:
+   - Consider implementing a fallback to the original WebSocket-only approach
+   - Detect WebRTC support and capabilities before attempting to use it
+
+## WebRTC Connection Setup Guide
+
+### Ensuring Proper WebRTC Media Line Order
+
+We've implemented a fix on the backend to ensure proper handling of WebRTC SDP negotiation, particularly focusing on the order of media lines in the SDP offer and answer. This is crucial for establishing a successful WebRTC connection, especially when adaptive bandwidth features are enabled.
+
+### Frontend Implementation Guidelines
+
+1. **SDP Handling**: When implementing WebRTC on the frontend, ensure you don't modify the SDP in any way before setting it as the remote description.
+
+2. **Connection Setup Example**:
 
 ```javascript
-// Instead of analytics/historical endpoint
-async function getHistoricalData(storeId, startDate, endDate) {
-  const response = await fetch(
-    `${API_BASE}/api/logs?store_id=${storeId}&start_date=${startDate}&end_date=${endDate}`,
-    {
-      headers: {
-        'Authorization': 'Bearer ' + jwtToken
-      }
-    }
-  );
+// Example WebRTC connection setup
+async function setupWebRTCConnection(cameraId) {
+  const token = localStorage.getItem('token');
+  const connectionId = await getConnectionId(cameraId, token);
   
-  if (!response.ok) {
-    throw new Error(`Failed to get historical data: ${response.status}`);
-  }
-  
-  return await response.json();
-}
-
-// For summary data, you'll need to process the logs data client-side
-// Example: Count entries and exits per day from logs data
-function summarizeLogData(logs, range = 'daily') {
-  const summary = {};
-  
-  logs.forEach(log => {
-    const date = log.timestamp.split(' ')[0]; // Get just the date part
-    
-    if (!summary[date]) {
-      summary[date] = { entries: 0, exits: 0 };
-    }
-    
-    if (log.event_type === 'entry') {
-      summary[date].entries++;
-    } else if (log.event_type === 'exit') {
-      summary[date].exits++;
-    }
+  // Create peer connection with STUN servers
+  const peerConnection = new RTCPeerConnection({
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' }
+    ]
   });
   
-  return summary;
+  // Set up event handlers
+  peerConnection.ontrack = (event) => {
+    if (event.track.kind === 'video') {
+      const videoElement = document.getElementById('video-element');
+      if (videoElement) {
+        videoElement.srcObject = event.streams[0];
+      }
+    }
+  };
+  
+  peerConnection.onicecandidate = async (event) => {
+    if (event.candidate) {
+      await sendIceCandidate(connectionId, event.candidate, token);
+    }
+  };
+  
+  peerConnection.onconnectionstatechange = () => {
+    console.log(`Connection state: ${peerConnection.connectionState}`);
+  };
+  
+  peerConnection.oniceconnectionstatechange = () => {
+    console.log(`ICE connection state: ${peerConnection.iceConnectionState}`);
+  };
+  
+  // Create and send offer
+  const offer = await peerConnection.createOffer({
+    offerToReceiveVideo: true,
+    offerToReceiveAudio: false
+  });
+  
+  await peerConnection.setLocalDescription(offer);
+  
+  // Send offer to server and get answer
+  const answer = await sendOffer(connectionId, offer.sdp, token);
+  
+  // IMPORTANT: Set the remote description with the answer exactly as received
+  // Do not modify the SDP answer in any way
+  await peerConnection.setRemoteDescription({
+    type: 'answer',
+    sdp: answer
+  });
+  
+  return peerConnection;
+}
+
+// Helper functions
+async function getConnectionId(cameraId, token) {
+  const response = await fetch(`/api/rtc/connection/${cameraId}`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  const data = await response.json();
+  return data.connection_id;
+}
+
+async function sendOffer(connectionId, offerSdp, token) {
+  const response = await fetch(`/api/rtc/offer/${connectionId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ sdp: offerSdp })
+  });
+  const data = await response.json();
+  return data.sdp;
+}
+
+async function sendIceCandidate(connectionId, candidate, token) {
+  await fetch(`/api/rtc/ice-candidate/${connectionId}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify(candidate)
+  });
 }
 ```
 
-### 3. Camera Feed API
+### Troubleshooting WebRTC Connections
 
-**Issue**: `GET /api/camera/feed/1?resolution=low` - 404 Not Found
+If you encounter connection issues:
 
-The correct path for camera feeds is:
-```
-GET /api/cameras/{camera_id}/feed
-```
+1. **Check SDP Handling**: Ensure you're not modifying the SDP in any way before setting it as the remote description.
 
-Example usage:
+2. **Verify ICE Candidates**: Make sure ICE candidates are being properly exchanged between the client and server.
+
+3. **Connection State Logging**: Implement detailed logging of connection state changes to help diagnose issues:
+
 ```javascript
-// Correct way to access camera feed
-const cameraId = 1;
-const feedUrl = `${API_BASE}/api/cameras/${cameraId}/feed`;
+peerConnection.addEventListener('connectionstatechange', event => {
+  console.log(`Connection state changed: ${peerConnection.connectionState}`);
+  // Log the full event details for debugging
+  console.log('Connection state change event:', event);
+});
 
-// If you need to embed in an image tag
-const imgElement = document.createElement('img');
-imgElement.src = `${feedUrl}?token=${jwtToken}`;
-document.body.appendChild(imgElement);
-
-// Note: For live video streaming, you should use the WebSocket endpoint instead
-// as described in the WebSocket-Based Live Detection section
+peerConnection.addEventListener('signalingstatechange', () => {
+  console.log(`Signaling state: ${peerConnection.signalingState}`);
+});
 ```
 
-If you require different resolution options for the camera feed, please request this feature from the backend team. 
+4. **SDP Debugging**: If problems persist, log the SDP offer and answer to compare and identify any discrepancies:
 
-## Important WebSocket Implementation Notes
+```javascript
+console.log('Offer SDP:', offer.sdp);
+console.log('Answer SDP:', answerSdp);
+```
 
-### Backend Issues and Workarounds
+5. **Network Conditions**: Be aware that WebRTC performance can be affected by network conditions. Implement appropriate error handling and reconnection logic.
 
-We've identified some issues in the backend WebSocket implementation that you should be aware of:
+### Adaptive Bandwidth Considerations
 
-1. **Multiple Camera WebSocket Error**: 
-   There's currently a bug in the multiple camera WebSocket endpoint (`/api/ws/detections`) that causes server errors. The error occurs because of a missing import in the backend code:
-   ```
-   UnboundLocalError: cannot access local variable 'status' where it is not associated with a value
-   ```
+Our backend now correctly handles adaptive bandwidth features while maintaining proper media line order. When implementing adaptive bandwidth features on the frontend:
 
-2. **Recommended Approach**:
-   - Use the single camera WebSocket endpoint (`/api/ws/live-detections/{camera_id}`) which is working correctly
-   - Avoid using the multiple camera WebSocket endpoint until the backend issue is fixed
-   - If you need to display multiple cameras, create individual WebSocket connections for each camera
+1. **Use Standard APIs**: Stick to standard WebRTC APIs for bandwidth adaptation.
 
-### Frontend Implementation Guide
+2. **Avoid SDP Manipulation**: Don't manually modify SDP parameters related to bandwidth; instead, use the RTCPeerConnection API methods.
 
-Given these limitations, here's how you should implement the WebSocket functionality:
+3. **Bandwidth Estimation**: If implementing custom bandwidth estimation, ensure it doesn't interfere with the SDP negotiation process.
+```
 
-1. **For single camera views**:
-   ```javascript
-   function setupSingleCameraWebSocket(cameraId) {
-     const token = localStorage.getItem('token');
-     const socket = new WebSocket(
-       `ws://${API_HOST}/api/ws/live-detections/${cameraId}?token=${token}`
-     );
-     
-     // Setup event handlers as described in the previous section
-     // ...
-     
-     return socket;
-   }
-   ```
+{{ ... }}
+```
 
-2. **For multiple camera views**:
-   ```javascript
-   function setupMultipleCameraWebSockets(cameraIds) {
-     const connections = {};
-     
-     // Create a separate WebSocket connection for each camera
-     cameraIds.forEach(cameraId => {
-       connections[cameraId] = setupSingleCameraWebSocket(cameraId);
-     });
-     
-     // Function to close all connections
-     function closeAllConnections() {
-       Object.values(connections).forEach(socket => {
-         if (socket && socket.readyState === WebSocket.OPEN) {
-           socket.close();
-         }
-       });
-     }
-     
-     return {
-       connections,
-       closeAllConnections
-     };
-   }
-   ```
+### ZVision API Endpoints Reference
 
-3. **Managing WebSocket Resources**:
-   ```javascript
-   // Example usage in a React component
-   function CameraView({ cameraIds }) {
-     const [webSockets, setWebSockets] = useState(null);
-     
-     useEffect(() => {
-       // Setup WebSocket connections when component mounts
-       const ws = setupMultipleCameraWebSockets(cameraIds);
-       setWebSockets(ws);
-       
-       // Clean up connections when component unmounts
-       return () => {
-         if (ws) {
-           ws.closeAllConnections();
-         }
-       };
-     }, [cameraIds]);
-     
-     // Component implementation
-     // ...
-   }
-   ```
+This section provides a comprehensive list of all available API endpoints in the ZVision backend system. Use this as a reference when implementing frontend functionality.
 
-### Testing Considerations
+### Authentication Endpoints
 
-When testing the WebSocket functionality:
+| Endpoint | Method | Description | Request Body | Response |
+|----------|--------|-------------|-------------|----------|
+| `/api/auth/login` | POST | Authenticate user and get JWT token | `{"username": "string", "password": "string"}` | `{"access_token": "string", "token_type": "bearer"}` |
+| `/api/token` | GET | Get a new JWT token (alternative endpoint) | None | JWT token string |
 
-1. **Verify Frame Rate Settings**: 
-   - After setting the frame_rate parameter in calibration, look for the server log message:
-     ```
-     Camera 1: Using configured frame rate from calibration: 5 FPS (interval: 0.200s)
-     ```
-   - This confirms the backend is correctly using your frame rate setting
+### Store Management
 
-2. **Connection Debugging**:
-   - Monitor the browser console for WebSocket connection events
-   - Check server logs for connection opening/closing messages
-   - Use browser network tools to verify WebSocket data is flowing
+| Endpoint | Method | Description | Request Body | Response |
+|----------|--------|-------------|-------------|----------|
+| `/api/stores` | GET | Get all stores | None | Array of store objects |
+| `/api/stores/{store_id}` | GET | Get store by ID | None | Store object |
+| `/api/stores` | POST | Create new store | `{"name": "string", "location": "string"}` | Created store object |
+| `/api/stores/{store_id}` | PUT | Update store | `{"name": "string", "location": "string"}` | Updated store object |
+| `/api/stores/{store_id}` | DELETE | Delete store | None | `{"success": true}` |
 
-3. **Performance Testing**:
-   - Test with different frame_rate settings to find the optimal balance
-   - On Raspberry Pi, keep frame_rate under 10 for best performance
-   - For multiple cameras, use lower frame rates (1-3 FPS per camera) to avoid overloading the system
+### Camera Management
+
+| Endpoint | Method | Description | Request Body | Response |
+|----------|--------|-------------|-------------|----------|
+| `/api/cameras` | GET | Get all cameras | None | Array of camera objects |
+| `/api/cameras/{camera_id}` | GET | Get camera by ID | None | Camera object |
+| `/api/cameras` | POST | Create new camera | Camera object | Created camera object |
+| `/api/cameras/{camera_id}` | PUT | Update camera | Camera object | Updated camera object |
+| `/api/cameras/{camera_id}` | DELETE | Delete camera | None | `{"success": true}` |
+| `/api/cameras/{camera_id}/calibrate` | POST | Set camera calibration | Calibration object | `{"success": true}` |
+| `/api/cameras/{camera_id}/feed` | GET | Get camera feed image | None | JPEG image |
+
+### Detection Endpoints
+
+| Endpoint | Method | Description | Request Body | Response |
+|----------|--------|-------------|-------------|----------|
+| `/api/detect` | POST | Trigger on-demand detection | `{"camera_id": int}` | Detection results |
+| `/api/detection/config` | POST | Configure automatic detection | `{"camera_id": int, "interval_seconds": float, "enabled": bool}` | Configuration status |
+
+### Logs and Analytics
+
+| Endpoint | Method | Description | Request Body | Response |
+|----------|--------|-------------|-------------|----------|
+| `/api/logs` | GET | Get detection logs | Query params: `store_id`, `camera_id`, `start_date`, `end_date`, `event_type`, `limit` | Array of log entries |
+
+### WebSocket Endpoints
+
+| Endpoint | Description | Query Parameters | Message Format |
+|----------|-------------|------------------|----------------|
+| `/api/ws/rtc-signaling/{camera_id}` | WebRTC signaling | `token` | JSON messages for WebRTC setup |
+| `/api/ws/detection-data/{camera_id}` | Detection data stream | `token`, `frame_rate` | JSON detection data |
+| `/api/ws/live-detections/{camera_id}` | Live video with detections | `token` | JSON with base64 frames and detections |
+
+### WebRTC Endpoints
+
+| Endpoint | Method | Description | Request Body | Response |
+|----------|--------|-------------|-------------|----------|
+| `/api/rtc/connection/{camera_id}` | GET | Get a new WebRTC connection ID | None | `{"connection_id": "string"}` |
+| `/api/rtc/offer/{connection_id}` | POST | Send WebRTC offer | `{"sdp": "string"}` | `{"sdp": "string"}` |
+| `/api/rtc/ice-candidate/{connection_id}` | POST | Send ICE candidate | ICE candidate object | `{"success": true}` |
+
+## Detailed WebRTC Implementation Guide
+
+### Complete WebRTC Connection Flow
+
+Below is a detailed pseudocode implementation for establishing a WebRTC connection with the ZVision backend:
+
+```javascript
+/**
+ * Complete WebRTC implementation for ZVision
+ * This handles the entire connection flow including:
+ * - Connection setup
+ * - SDP offer/answer exchange
+ * - ICE candidate handling
+ * - Video track processing
+ * - Connection state management
+ * - Error handling and reconnection
+ */
+class ZVisionWebRTC {
+  constructor(cameraId, videoElement) {
+    // Configuration
+    this.cameraId = cameraId;
+    this.videoElement = videoElement;
+    this.token = localStorage.getItem('token');
+    this.apiBase = '/api'; // Adjust based on your API base URL
+    
+    // State
+    this.connectionId = null;
+    this.peerConnection = null;
+    this.connectionState = 'disconnected';
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 5;
+    
+    // Bind methods
+    this.connect = this.connect.bind(this);
+    this.disconnect = this.disconnect.bind(this);
+    this.handleConnectionStateChange = this.handleConnectionStateChange.bind(this);
+    this.handleICECandidate = this.handleICECandidate.bind(this);
+    this.handleTrack = this.handleTrack.bind(this);
+    this.sendOffer = this.sendOffer.bind(this);
+    this.sendIceCandidate = this.sendIceCandidate.bind(this);
+  }
+  
+  /**
+   * Initialize and start WebRTC connection
+   */
+  async connect() {
+    try {
+      this.connectionState = 'connecting';
+      
+      // Step 1: Get a connection ID from the server
+      const connectionId = await this.getConnectionId();
+      this.connectionId = connectionId;
+      console.log(`Received connection ID: ${connectionId}`);
+      
+      // Step 2: Create RTCPeerConnection with STUN servers
+      this.createPeerConnection();
+      
+      // Step 3: Create and send offer to server
+      await this.createAndSendOffer();
+      
+      return true;
+    } catch (error) {
+      console.error('Failed to establish WebRTC connection:', error);
+      this.connectionState = 'failed';
+      
+      // Attempt reconnection if appropriate
+      if (this.reconnectAttempts < this.maxReconnectAttempts) {
+        this.reconnectAttempts++;
+        console.log(`Reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
+        
+        // Exponential backoff
+        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+        setTimeout(() => this.connect(), delay);
+      }
+      
+      return false;
+    }
+  }
+  
+  /**
+   * Create RTCPeerConnection with appropriate configuration
+   */
+  createPeerConnection() {
+    // Configuration with STUN servers for NAT traversal
+    const config = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+    
+    // Create new connection
+    this.peerConnection = new RTCPeerConnection(config);
+    
+    // Set up event handlers
+    this.peerConnection.ontrack = this.handleTrack;
+    this.peerConnection.onicecandidate = this.handleICECandidate;
+    this.peerConnection.onconnectionstatechange = this.handleConnectionStateChange;
+    this.peerConnection.oniceconnectionstatechange = (event) => {
+      console.log(`ICE connection state: ${this.peerConnection.iceConnectionState}`);
+    };
+    this.peerConnection.onsignalingstatechange = (event) => {
+      console.log(`Signaling state: ${this.peerConnection.signalingState}`);
+    };
+  }
+  
+  /**
+   * Get a connection ID from the server
+   */
+  async getConnectionId() {
+    const response = await fetch(`${this.apiBase}/rtc/connection/${this.cameraId}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${this.token}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to get connection ID: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    return data.connection_id;
+  }
+  
+  /**
+   * Create and send SDP offer to server
+   */
+  async createAndSendOffer() {
+    try {
+      // Create offer with video only (no audio)
+      const offer = await this.peerConnection.createOffer({
+        offerToReceiveVideo: true,
+        offerToReceiveAudio: false
+      });
+      
+      // Set as local description
+      await this.peerConnection.setLocalDescription(offer);
+      console.log('Set local description from offer');
+      
+      // Send offer to server and get answer
+      const answerSdp = await this.sendOffer(offer.sdp);
+      
+      // CRITICAL: Set remote description with answer
+      // Do NOT modify the SDP answer in any way to ensure media line order is preserved
+      await this.peerConnection.setRemoteDescription({
+        type: 'answer',
+        sdp: answerSdp
+      });
+      
+      console.log('Set remote description from server answer');
+    } catch (error) {
+      console.error('Error creating/sending offer:', error);
+      throw error;
+    }
+  }
+  
+  /**
+   * Send SDP offer to server and get answer
+   */
+  async sendOffer(offerSdp) {
+    try {
+      const response = await fetch(`${this.apiBase}/rtc/offer/${this.connectionId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.token}`
+        },
+        body: JSON.stringify({ sdp: offerSdp })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Server rejected offer: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      return data.sdp;
+    } catch (error) {
+      console.error('Error sending offer to server:', error);
+      throw error;
+    }
+  }
+  
+  /**
+   * Handle ICE candidates and send them to the server
+   */
+  async handleICECandidate(event) {
+    if (event.candidate) {
+      try {
+        await this.sendIceCandidate(event.candidate);
+      } catch (error) {
+        console.warn('Failed to send ICE candidate:', error);
+      }
+    }
+  }
+  
+  /**
+   * Send ICE candidate to server
+   */
+  async sendIceCandidate(candidate) {
+    try {
+      const response = await fetch(`${this.apiBase}/rtc/ice-candidate/${this.connectionId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.token}`
+        },
+        body: JSON.stringify(candidate)
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to send ICE candidate: ${response.status}`);
+      }
+    } catch (error) {
+      console.error('Error sending ICE candidate:', error);
+      throw error;
+    }
+  }
+  
+  /**
+   * Handle incoming media tracks
+   */
+  handleTrack(event) {
+    if (event.track.kind === 'video') {
+      console.log('Received remote video track');
+      
+      // Connect the track to the video element
+      if (this.videoElement && this.videoElement.srcObject !== event.streams[0]) {
+        this.videoElement.srcObject = event.streams[0];
+        console.log('Connected to camera stream');
+      }
+    }
+  }
+  
+  /**
+   * Handle connection state changes
+   */
+  handleConnectionStateChange() {
+    const state = this.peerConnection.connectionState;
+    console.log(`Connection state changed to: ${state}`);
+    
+    this.connectionState = state;
+    
+    switch (state) {
+      case 'connected':
+        // Connection established successfully
+        this.reconnectAttempts = 0; // Reset reconnect counter
+        break;
+        
+      case 'disconnected':
+      case 'failed':
+        // Handle connection failure
+        console.warn(`WebRTC connection ${state}`);
+        
+        // Attempt reconnection
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+          this.reconnectAttempts++;
+          console.log(`Reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
+          
+          // Exponential backoff
+          const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+          setTimeout(() => this.connect(), delay);
+        }
+        break;
+        
+      case 'closed':
+        // Connection closed normally
+        console.log('WebRTC connection closed');
+        break;
+    }
+  }
+  
+  /**
+   * Disconnect and clean up resources
+   */
+  disconnect() {
+    if (this.peerConnection) {
+      // Remove all event listeners
+      this.peerConnection.ontrack = null;
+      this.peerConnection.onicecandidate = null;
+      this.peerConnection.onconnectionstatechange = null;
+      this.peerConnection.oniceconnectionstatechange = null;
+      this.peerConnection.onsignalingstatechange = null;
+      
+      // Close the connection
+      this.peerConnection.close();
+      this.peerConnection = null;
+      
+      // Clean up video element
+      if (this.videoElement && this.videoElement.srcObject) {
+        const tracks = this.videoElement.srcObject.getTracks();
+        tracks.forEach(track => track.stop());
+        this.videoElement.srcObject = null;
+      }
+      
+      this.connectionState = 'disconnected';
+      console.log('WebRTC connection resources cleaned up');
+    }
+  }
+}
+
+/**
+ * Usage example:
+ * 
+ * // In a React component
+ * useEffect(() => {
+ *   const videoElement = document.getElementById('camera-video');
+ *   const webrtc = new ZVisionWebRTC(1, videoElement);
+ *   
+ *   webrtc.connect();
+ *   
+ *   // Clean up on unmount
+ *   return () => {
+ *     webrtc.disconnect();
+ *   };
+ * }, []);
+ */
+```
+
+### React Component Implementation Example
+
+Here's how you can implement the WebRTC connection in a React component:
+
+```jsx
+import React from 'react';
+import CameraStream from './CameraStream';
+
+const MultiCameraView = ({ cameraIds }) => {
+  return (
+    <div className="multi-camera-container">
+      {cameraIds.map(cameraId => (
+        <div key={cameraId} className="camera-cell">
+          <h3>Camera {cameraId}</h3>
+          <CameraStream cameraId={cameraId} />
+        </div>
+      ))}
+    </div>
+  );
+};
+
+export default MultiCameraView;
+```
+
+### CSS Styling Example
+
+```css
+.camera-stream {
+  position: relative;
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: #000;
+  margin-bottom: 20px;
+}
+
+.video-display {
+  width: 100%;
+  display: block;
+}
+
+.connection-status {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  z-index: 10;
+}
+
+.loading-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: white;
+}
+
+.spinner {
+  border: 4px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  border-top: 4px solid white;
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 10px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.multi-camera-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.camera-cell {
+  background-color: #f5f5f5;
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+```
+
+This comprehensive implementation provides a robust WebRTC connection to the ZVision backend with proper error handling, reconnection logic, and user feedback.
