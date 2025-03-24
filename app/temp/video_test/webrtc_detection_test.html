@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC + Detection Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        .video-container {
+            position: relative;
+            margin: 20px 0;
+            background-color: #000;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        video {
+            width: 100%;
+            max-height: 500px;
+            display: block;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        .controls {
+            margin: 20px 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background-color: #3367d6;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .input-group {
+            margin: 10px 0;
+            display: flex;
+            flex-direction: column;
+        }
+        label {
+            margin-bottom: 5px;
+        }
+        input, select {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .detection-box {
+            position: absolute;
+            border: 2px solid red;
+            box-sizing: border-box;
+        }
+        .detection-text {
+            position: absolute;
+            background-color: rgba(255, 0, 0, 0.7);
+            color: white;
+            padding: 2px 5px;
+            font-size: 12px;
+        }
+        .frame-rate-control {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+            flex-wrap: wrap;
+        }
+        .frame-rate-control label {
+            margin-right: 10px;
+            min-width: 150px;
+        }
+        .frame-rate-control input {
+            flex: 1;
+            max-width: 400px;
+            margin-right: 10px;
+        }
+        .frame-rate-control span {
+            min-width: 30px;
+        }
+        #logOutput {
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            background-color: #f8f8f8;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            margin-top: 20px;
+        }
+        .log-entry {
+            margin-bottom: 3px;
+        }
+        .log-info {
+            color: #333;
+        }
+        .log-error {
+            color: #d32f2f;
+        }
+        .log-warning {
+            color: #f57c00;
+        }
+        .log-success {
+            color: #388e3c;
+        }
+        .log-debug {
+            color: #0288d1;
+        }
+        .stats {
+            margin-top: 10px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .stat-item {
+            background-color: #e3f2fd;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WebRTC + Detection Test</h1>
+        
+        <div class="input-group">
+            <label for="apiUrl">API URL:</label>
+            <input type="text" id="apiUrl" value="http://localhost:8000/api" placeholder="http://localhost:8000/api">
+        </div>
+        
+        <div class="input-group">
+            <label for="cameraId">Camera ID:</label>
+            <input type="number" id="cameraId" value="1" min="1">
+        </div>
+        
+        <div class="input-group">
+            <label for="username">Username:</label>
+            <input type="text" id="username" value="admin" placeholder="Username">
+        </div>
+        
+        <div class="input-group">
+            <label for="password">Password:</label>
+            <input type="password" id="password" value="123456" placeholder="Password">
+        </div>
+        
+        <div class="frame-rate-control">
+            <label for="frameRateSlider">Detection Frame Rate:</label>
+            <input type="range" id="frameRateSlider" min="1" max="30" value="5">
+            <span id="frameRateValue">5 FPS</span>
+        </div>
+        
+        <div class="video-container">
+            <video id="videoElement" autoplay playsinline muted></video>
+            <canvas id="detectionCanvas"></canvas>
+        </div>
+        
+        <div class="stats">
+            <div class="stat-item">WebRTC Status: <span id="webrtcStatus">Disconnected</span></div>
+            <div class="stat-item">Detection Status: <span id="detectionStatus">Stopped</span></div>
+            <div class="stat-item">Persons Detected: <span id="personCount">0</span></div>
+            <div class="stat-item">Last Detection: <span id="lastDetectionTime">Never</span></div>
+        </div>
+        
+        <div class="controls">
+            <button id="startButton">Start Streaming</button>
+            <button id="stopButton" disabled>Stop Streaming</button>
+            <button id="testToken">Test Token</button>
+            <button id="toggleDetection" disabled>Start Detection</button>
+        </div>
+        
+        <div class="status" id="statusElement">Status: Disconnected</div>
+        <div id="logOutput"></div>
+    </div>
+
+    <script>
+        // Configuration and state
+        const config = {
+            apiUrl: window.location.protocol + '//' + window.location.hostname + ':' + window.location.port + '/api', // Use the same server for API
+            cameraId: 1,
+            username: '',
+            password: '',
+            token: '',
+            frameRate: 5
+        };
+        
+        // Detection state
+        const detection = {
+            enabled: false,
+            inProgress: false,
+            interval: null,
+            currentFrame: null,
+            lastDetectionTime: null,
+            boxes: []
+        };
+        
+        // DOM elements
+        const videoElement = document.getElementById('videoElement');
+        const detectionCanvas = document.getElementById('detectionCanvas');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const toggleDetection = document.getElementById('toggleDetection');
+        const statusElement = document.getElementById('statusElement');
+        const frameRateSlider = document.getElementById('frameRateSlider');
+        const frameRateValue = document.getElementById('frameRateValue');
+        const webrtcStatus = document.getElementById('webrtcStatus');
+        const detectionStatus = document.getElementById('detectionStatus');
+        const personCount = document.getElementById('personCount');
+        const lastDetectionTime = document.getElementById('lastDetectionTime');
+        const logOutput = document.getElementById('logOutput');
+        
+        // WebRTC variables
+        let peerConnection = null;
+        let localStream = null;
+        
+        // Capture context for the detection canvas
+        const context = detectionCanvas.getContext('2d');
+        
+        // Update frame rate when slider changes
+        frameRateSlider.addEventListener('input', async () => {
+            const fps = frameRateSlider.value;
+            config.frameRate = parseInt(fps);
+            frameRateValue.textContent = `${fps} FPS`;
+            
+            // Update detection frame rate on the server if it's running
+            if (detection.enabled) {
+                try {
+                    // Call the detection frame rate update endpoint
+                    const response = await fetch(`${config.apiUrl}/detection-webrtc/webrtc/${config.cameraId}/detect/update?token=${encodeURIComponent(config.token)}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            frame_rate: config.frameRate
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+                    }
+                    
+                    const result = await response.json();
+                    logger.success(`Frame rate updated to ${fps} FPS: ${result.message}`);
+                } catch (error) {
+                    logger.error(`Failed to update frame rate: ${error.message}`);
+                }
+            }
+        });
+        
+        // Logging functions
+        const logger = {
+            log: (...args) => {
+                console.log(...args);
+                appendLogEntry('info', args.join(' '));
+            },
+            error: (...args) => {
+                console.error(...args);
+                appendLogEntry('error', args.join(' '));
+            },
+            warn: (...args) => {
+                console.warn(...args);
+                appendLogEntry('warning', args.join(' '));
+            },
+            info: (...args) => {
+                console.info(...args);
+                appendLogEntry('info', args.join(' '));
+            },
+            debug: (...args) => {
+                console.debug(...args);
+                appendLogEntry('debug', args.join(' '));
+            },
+            success: (...args) => {
+                appendLogEntry('success', args.join(' '));
+            }
+        };
+        
+        function appendLogEntry(type, message) {
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${message}`;
+            
+            logOutput.appendChild(entry);
+            logOutput.scrollTop = logOutput.scrollHeight;
+            
+            // Limit log entries
+            while (logOutput.childElementCount > 50) {
+                logOutput.removeChild(logOutput.firstChild);
+            }
+        }
+        
+        // Event listeners
+        startButton.addEventListener('click', startStreaming);
+        stopButton.addEventListener('click', stopStreaming);
+        toggleDetection.addEventListener('click', toggleDetectionProcessing);
+        document.getElementById('testToken').addEventListener('click', async () => {
+            try {
+                await getToken();
+                logger.success('Token acquired successfully!');
+            } catch (error) {
+                logger.error('Failed to get token:', error);
+            }
+        });
+        
+        // Handle video sizing and canvas resizing
+        function resizeCanvas() {
+            if (videoElement.videoWidth) {
+                detectionCanvas.width = videoElement.videoWidth;
+                detectionCanvas.height = videoElement.videoHeight;
+            }
+        }
+        
+        window.addEventListener('resize', resizeCanvas);
+        videoElement.addEventListener('loadedmetadata', resizeCanvas);
+        
+        // Get authentication token
+        async function getToken() {
+            config.username = document.getElementById('username').value;
+            config.password = document.getElementById('password').value;
+            config.apiUrl = document.getElementById('apiUrl').value;
+            
+            if (!config.username || !config.password) {
+                throw new Error('Username and password are required');
+            }
+            
+            try {
+                const response = await fetch(`${config.apiUrl}/token`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: `username=${encodeURIComponent(config.username)}&password=${encodeURIComponent(config.password)}`
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to get token: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                config.token = data.access_token;
+                return config.token;
+            } catch (error) {
+                throw new Error(`Authentication failed: ${error.message}`);
+            }
+        }
+        
+        // Start streaming
+        async function startStreaming() {
+            try {
+                config.cameraId = parseInt(document.getElementById('cameraId').value);
+                
+                // Disable start button during setup
+                startButton.disabled = true;
+                updateStatus('Authenticating...');
+                webrtcStatus.textContent = 'Connecting...';
+                
+                // Get token if not already available
+                if (!config.token) {
+                    await getToken();
+                }
+                
+                // Update UI for connecting state
+                updateStatus('Connecting to WebRTC...');
+                
+                // Connect using WebRTC
+                await connectWebRTC();
+                
+                // Update UI for connected state
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                toggleDetection.disabled = false;
+                webrtcStatus.textContent = 'Connected';
+                updateStatus('Connected to WebRTC');
+                
+            } catch (error) {
+                // Enable start button for retry
+                startButton.disabled = false;
+                webrtcStatus.textContent = 'Error';
+                logger.error('Error starting stream:', error);
+                updateStatus(`Error: ${error.message}`);
+            }
+        }
+        
+        // Stop streaming
+        async function stopStreaming() {
+            stopDetection();
+            toggleDetection.disabled = true;
+            toggleDetection.textContent = 'Start Detection';
+            
+            if (peerConnection) {
+                // Close the connection
+                try {
+                    peerConnection.close();
+                } catch (error) {
+                    logger.error('Error closing peer connection:', error);
+                }
+                peerConnection = null;
+            }
+            
+            // Clear video element
+            videoElement.srcObject = null;
+            
+            // Reset canvas
+            if (context) {
+                context.clearRect(0, 0, detectionCanvas.width, detectionCanvas.height);
+            }
+            
+            // Update UI
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            webrtcStatus.textContent = 'Disconnected';
+            updateStatus('Disconnected');
+            logger.info('Stream stopped');
+        }
+        
+        // Connect to WebRTC
+        async function connectWebRTC() {
+            try {
+                // Create RTCPeerConnection
+                peerConnection = createPeerConnection();
+                
+                // Create SDP offer
+                const offer = await peerConnection.createOffer({
+                    offerToReceiveAudio: false,
+                    offerToReceiveVideo: true
+                });
+                
+                // Set local description
+                await peerConnection.setLocalDescription(offer);
+                
+                // Send offer to server and get answer
+                const response = await fetch(`${config.apiUrl}/rtc/offer/${config.cameraId}?token=${encodeURIComponent(config.token)}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        camera_id: config.cameraId,
+                        sdp: peerConnection.localDescription.sdp,
+                        type: peerConnection.localDescription.type
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+                }
+                
+                const offerResponse = await response.json();
+                logger.debug('Offer response:', JSON.stringify(offerResponse));
+                
+                // Get the connection ID from the response
+                if (!offerResponse.connection_id) {
+                    throw new Error('No connection ID returned from server');
+                }
+                
+                // Now get the actual SDP answer using the connection ID
+                const answerResponse = await fetch(`${config.apiUrl}/rtc/answer/${offerResponse.connection_id}?token=${encodeURIComponent(config.token)}`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (!answerResponse.ok) {
+                    throw new Error(`Failed to get SDP answer: ${answerResponse.status}: ${answerResponse.statusText}`);
+                }
+                
+                const answerData = await answerResponse.json();
+                logger.debug('Answer data:', JSON.stringify(answerData));
+                
+                // ZVision API returns answer with a nested answer object
+                // No need to check for SDP here, we handle it in the next section
+                
+                // Set remote description (answer from server)
+                logger.debug('Server answer:', JSON.stringify(answerData));
+                
+                try {
+                    // Get the SDP directly from the response structure
+                    if (answerData && answerData.answer && answerData.answer.sdp) {
+                        logger.debug('Found valid answer SDP structure');
+                        const sdpAnswer = {
+                            type: 'answer',
+                            sdp: answerData.answer.sdp
+                        };
+                        await peerConnection.setRemoteDescription(new RTCSessionDescription(sdpAnswer));
+                        logger.success('Remote description set successfully');
+                    } else {
+                        throw new Error(`SDP not found in expected format: ${JSON.stringify(answerData)}`);
+                    }
+                } catch (error) {
+                    logger.error('Failed to set remote description:', error);
+                    throw error;
+                }
+                
+                logger.success('WebRTC connection established');
+                
+                // Any ICE candidates should be sent to the server here
+                // (omitted for simplicity since server-side ICE handling is done)
+                
+            } catch (error) {
+                logger.error('WebRTC connection failed:', error);
+                throw error;
+            }
+        }
+        
+        // Create WebRTC peer connection
+        function createPeerConnection() {
+            // Configure STUN/TURN servers as needed
+            const config = {
+                iceServers: [
+                    {
+                        urls: [
+                            'stun:stun.l.google.com:19302',
+                            'stun:stun1.l.google.com:19302'
+                        ]
+                    }
+                ]
+            };
+            
+            const pc = new RTCPeerConnection(config);
+            
+            // Handle ICE candidate events
+            pc.onicecandidate = event => {
+                if (event.candidate) {
+                    logger.debug('New ICE candidate:', event.candidate.candidate);
+                    
+                    // Send candidate to server (omitted for simplicity)
+                    // In a production app, you would send this to the server
+                }
+            };
+            
+            // Handle connection state changes
+            pc.onconnectionstatechange = () => {
+                logger.info('Connection state:', pc.connectionState);
+                webrtcStatus.textContent = pc.connectionState;
+                
+                if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+                    logger.warn('WebRTC connection closed or failed');
+                    stopStreaming();
+                }
+            };
+            
+            // Handle ICE connection state changes
+            pc.oniceconnectionstatechange = () => {
+                logger.info('ICE connection state:', pc.iceConnectionState);
+                
+                if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'closed') {
+                    logger.warn('ICE connection closed or failed');
+                }
+            };
+            
+            // Handle track events (receiving video)
+            pc.ontrack = event => {
+                logger.info('Received track:', event.track.kind);
+                
+                if (event.track.kind === 'video') {
+                    videoElement.srcObject = event.streams[0];
+                    
+                    // Setup the canvas when video loads
+                    videoElement.onloadedmetadata = () => {
+                        resizeCanvas();
+                    };
+                }
+            };
+            
+            return pc;
+        }
+        
+        // This function is no longer used - we handle the response directly
+        
+        // Toggle detection
+        function toggleDetectionProcessing() {
+            if (detection.enabled) {
+                stopDetection();
+                toggleDetection.textContent = 'Start Detection';
+            } else {
+                startDetection();
+                toggleDetection.textContent = 'Stop Detection';
+            }
+        }
+        
+        // Start detection using WebRTC detection API
+        async function startDetection() {
+            if (!videoElement.srcObject) {
+                logger.error('Video stream not available');
+                return;
+            }
+            
+            // Get frame rate from slider
+            config.frameRate = parseInt(document.getElementById('frameRateSlider').value);
+            updateStatus(`Starting detection at ${config.frameRate} FPS...`);
+            
+            try {
+                // Call the detection configuration endpoint to enable detection
+                const response = await fetch(`${config.apiUrl}/detection/config`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${config.token}`
+                    },
+                    body: JSON.stringify({
+                        camera_id: parseInt(config.cameraId, 10), // Ensure camera_id is an integer
+                        interval_seconds: Math.round(1.0 / config.frameRate), // Convert FPS to interval seconds as integer
+                        enabled: true
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(`Server returned ${response.status}: ${errorData.detail || response.statusText}`);
+                }
+                
+                const result = await response.json();
+                logger.success(`Server detection started: ${result.message}`);
+                
+                // Update detection state
+                detection.enabled = true;
+                detectionStatus.textContent = 'Running';
+                
+                // Start polling for detection results
+                detection.interval = setInterval(getDetectionStatus, 1000);
+                
+                logger.info(`Detection started at ${config.frameRate} FPS`);
+                return result;
+            } catch (error) {
+                logger.error('Error starting detection:', error);
+                detectionStatus.textContent = 'Error';
+                throw error;
+            }
+        }
+        
+        // Stop detection using WebRTC detection API
+        async function stopDetection() {
+            if (detection.interval) {
+                clearInterval(detection.interval);
+                detection.interval = null;
+            }
+            
+            // Clear canvas
+            if (context) {
+                context.clearRect(0, 0, detectionCanvas.width, detectionCanvas.height);
+            }
+            
+            try {
+                // Only call the server if detection was enabled
+                if (detection.enabled) {
+                    updateStatus('Stopping detection...');
+                    
+                    // Call the detection configuration endpoint to disable detection
+                    const response = await fetch(`${config.apiUrl}/detection/config`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${config.token}`
+                        },
+                        body: JSON.stringify({
+                            camera_id: parseInt(config.cameraId, 10), // Ensure camera_id is an integer
+                            interval_seconds: 10, // Default interval
+                            enabled: false
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({}));
+                        throw new Error(`Server returned ${response.status}: ${errorData.detail || response.statusText}`);
+                    }
+                    
+                    const result = await response.json();
+                    logger.success(`Server detection stopped: ${result.message}`);
+                }
+            } catch (error) {
+                logger.error('Error stopping detection:', error);
+            } finally {
+                // Update detection state regardless of server response
+                detection.enabled = false;
+                detectionStatus.textContent = 'Stopped';
+                logger.info('Detection stopped');
+            }
+        }
+        
+        // Get detection status from the server
+        async function getDetectionStatus() {
+            if (!detection.enabled || !videoElement.srcObject) {
+                return;
+            }
+            
+            try {
+                // Trigger an on-demand detection for the current camera
+                // Using query parameter approach as shown in the API documentation
+                const response = await fetch(`${config.apiUrl}/detect?camera_id=${config.cameraId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${config.token}`
+                    }
+                    // No body needed when using query parameter
+                });
+                
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        // Detection might have stopped on the server, stop locally too
+                        stopDetection();
+                        return;
+                    }
+                    throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                logger.debug(`Detection results received: ${result.detections ? result.detections.length : 0} detections`);
+                
+                if (result.detections && result.detections.length > 0) {
+                    // Process detection results
+                    const detectionResult = {
+                        camera_id: config.cameraId,
+                        timestamp: result.timestamp || Date.now() / 1000,
+                        detections: result.detections
+                    };
+                    
+                    detection.lastDetectionTime = new Date();
+                    
+                    processDetectionResults(detectionResult);
+                }
+            } catch (error) {
+                logger.error('Failed to get detection status:', error);
+            }
+        }
+        
+        // Capture a frame from the video element
+        function captureVideoFrame() {
+            // Create temporary canvas to capture the frame
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = videoElement.videoWidth;
+            tempCanvas.height = videoElement.videoHeight;
+            
+            const tempContext = tempCanvas.getContext('2d');
+            tempContext.drawImage(videoElement, 0, 0, tempCanvas.width, tempCanvas.height);
+            
+            // Store the captured frame for detection
+            detection.currentFrame = tempCanvas.toDataURL('image/jpeg', 0.8);
+        }
+        
+        // This function is no longer needed as we're using client-side detection
+        
+        // Process detection results
+        function processDetectionResults(results) {
+            if (!results || !results.detections) {
+                return;
+            }
+            
+            // Get detections (person class only)
+            const personDetections = results.detections.filter(d => d.class_name === 'person');
+            
+            // Update stats
+            personCount.textContent = personDetections.length;
+            lastDetectionTime.textContent = detection.lastDetectionTime.toLocaleTimeString();
+            
+            // Clear previous detections
+            context.clearRect(0, 0, detectionCanvas.width, detectionCanvas.height);
+            
+            // Draw new detections
+            drawDetectionBoxes(personDetections);
+            
+            if (personDetections.length > 0) {
+                logger.debug(`Detected ${personDetections.length} person(s)`);
+            }
+        }
+        
+        // Draw detection boxes on canvas
+        function drawDetectionBoxes(detections) {
+            if (!context || !detections || detections.length === 0) {
+                return;
+            }
+            
+            const videoWidth = videoElement.videoWidth;
+            const videoHeight = videoElement.videoHeight;
+            const canvasWidth = detectionCanvas.width;
+            const canvasHeight = detectionCanvas.height;
+            
+            // Scale factors (in case video and canvas dimensions differ)
+            const scaleX = canvasWidth / videoWidth;
+            const scaleY = canvasHeight / videoHeight;
+            
+            // Draw each detection
+            detections.forEach(detection => {
+                const [x1, y1, x2, y2] = detection.bbox;
+                const confidence = detection.confidence || 0;
+                
+                // Scale the bounding box to match canvas
+                const left = x1 * scaleX;
+                const top = y1 * scaleY;
+                const width = (x2 - x1) * scaleX;
+                const height = (y2 - y1) * scaleY;
+                
+                // Draw bounding box
+                context.strokeStyle = 'red';
+                context.lineWidth = 2;
+                context.strokeRect(left, top, width, height);
+                
+                // Draw label
+                context.fillStyle = 'rgba(255, 0, 0, 0.7)';
+                context.fillRect(left, top - 20, width, 20);
+                
+                context.fillStyle = 'white';
+                context.font = '14px Arial';
+                context.fillText(`Person ${(confidence * 100).toFixed(0)}%`, left + 5, top - 5);
+            });
+        }
+        
+        // Update status display
+        function updateStatus(message) {
+            statusElement.textContent = `Status: ${message}`;
+        }
+        
+        // Initialize with default values
+        window.addEventListener('DOMContentLoaded', () => {
+            // Set initial frame rate display
+            frameRateValue.textContent = `${frameRateSlider.value} FPS`;
+            
+            // Read config from inputs
+            config.apiUrl = document.getElementById('apiUrl').value;
+            config.cameraId = parseInt(document.getElementById('cameraId').value);
+            config.username = document.getElementById('username').value;
+            config.password = document.getElementById('password').value;
+            config.frameRate = parseInt(document.getElementById('frameRateSlider').value);
+            
+            logger.info('WebRTC + Detection Test initialized');
+        });
+    </script>
+</body>
+</html>

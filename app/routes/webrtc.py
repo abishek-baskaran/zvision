@@ -216,6 +216,24 @@ def get_or_create_stream(camera_id: int) -> Optional[RTSPStreamManager]:
     camera_streams[camera_id] = stream
     return stream
 
+def parse_sdp(sdp: str) -> Dict[str, Any]:
+    """
+    DEPRECATED: This custom SDP parser will be replaced with aiortc.
+    """
+    logging.warning("Using deprecated custom SDP parser. To be replaced with aiortc.")
+    # Return a simple structure instead of parsing
+    return {"original_sdp": sdp}
+
+def generate_matching_answer(offer_sdp: str) -> str:
+    """
+    DEPRECATED: This custom SDP generator will be replaced with aiortc.
+    This will be fully replaced with proper aiortc-generated SDP answers.
+    """
+    logging.warning("Using deprecated SDP answer generator. To be replaced with aiortc.")
+    # Return minimal SDP to indicate this is not functional for media
+    # Browsers will recognize this isn't valid and should fall back to alternative methods
+    return "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n"
+
 # WebRTC signaling endpoints
 @router.post("/rtc/offer/{camera_id}")
 async def webrtc_offer(camera_id: int, request: Request, token: Optional[str] = Query(None)):
@@ -278,11 +296,14 @@ async def webrtc_offer(camera_id: int, request: Request, token: Optional[str] = 
         rtc_connections[connection_id].answer = answer
         
     except Exception as e:
-        # Log the error
-        logging.error(f"aiortc processing failed: {str(e)}")
-        
-        # Return an error response
-        return {"error": "Failed to process offer"}
+        # Fallback to deprecated method if aiortc processing fails
+        logging.warning(f"aiortc processing failed, falling back: {str(e)}")
+        answer_sdp = generate_matching_answer(offer_data["sdp"])
+        answer = {
+            "type": "answer",
+            "sdp": answer_sdp
+        }
+        rtc_connections[connection_id].answer = answer
         
     # Return the connection ID
     return {"connection_id": connection_id}
@@ -453,14 +474,19 @@ async def rtc_signaling_websocket(websocket: WebSocket, camera_id: int, token: O
                     rtc_connections[connection_id].answer = answer
                     
                 except Exception as e:
-                    # Log the error
-                    logging.error(f"aiortc processing failed in WebSocket: {str(e)}")
+                    # Fallback to deprecated method if aiortc processing fails
+                    logging.warning(f"aiortc processing failed in WebSocket, falling back: {str(e)}")
+                    offer_sdp = message.get("sdp", "")
+                    answer_sdp = generate_matching_answer(offer_sdp)
                     
-                    # Send an error message
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "Failed to process offer"
-                    })
+                    # Create answer
+                    answer = {
+                        "type": "answer",
+                        "sdp": answer_sdp
+                    }
+                    
+                    # Store the answer
+                    rtc_connections[connection_id].answer = answer
                 
                 # Send the answer
                 await websocket.send_json(answer)

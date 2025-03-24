@@ -4,12 +4,10 @@ Test script for WebRTC signaling endpoint
 """
 import asyncio
 import json
-import websockets
 import sys
 import os
 import time
 import argparse
-import aiohttp
 import logging
 from random import randint
 
