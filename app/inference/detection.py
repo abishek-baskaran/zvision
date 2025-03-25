@@ -13,7 +13,7 @@ def run_yolo_inference(frame):
     labels -> [ l1, l2, ... ]
     """
     # Set verbose=False to disable YOLO's verbose output
-    results = _yolo_model.predict(source=frame, classes=[0], verbose=False)
+    results = _yolo_model.predict(source=frame, classes=[0], verbose=True)
     yolo_result = results[0]
 
     xyxy = yolo_result.boxes.xyxy.cpu().numpy()  # shape: (num_det, 4)

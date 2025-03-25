@@ -13,8 +13,10 @@ import logging
 from pydantic import BaseModel
 import random
 import re
+from jose import JWTError, jwt
 
-from app.routes.websockets import verify_token
+# Remove import from websockets and add the SECRET_KEY and ALGORITHM imports
+from app.config import SECRET_KEY, ALGORITHM
 from app.database.cameras import get_camera_by_id
 from app.routes.camera import _fetch_camera_source_by_id
 from app.webrtc.aiortc_handler import (
@@ -29,6 +31,21 @@ router = APIRouter()
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("webrtc")
+
+# Copy the verify_token function from websockets.py
+async def verify_token(token: str) -> Optional[dict]:
+    """Verify JWT token for WebSocket authentication"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        is_admin: bool = payload.get("admin", False)
+        
+        if username is None:
+            return None
+            
+        return {"username": username, "is_admin": is_admin}
+    except JWTError:
+        return None
 
 # Store active WebRTC connections and their signaling data
 class RTCSignalingData(BaseModel):
