@@ -1,11 +1,14 @@
 # app/routes/detection.py
 
-from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional, List, Dict
+import cv2
+import numpy as np
 
 from app.routes.auth import get_current_user
-from app.services.detection_service import detect_person_crossing
+from app.services.detection_service import detect_person_crossing, detect_all_people
+from app.inference.detection import run_yolo_inference
 
 router = APIRouter()
 
@@ -43,7 +46,9 @@ def detect(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid camera_id (must be an integer).")
 
-    detection_result = detect_person_crossing(cam_id)
+    # Use the new function that detects all people without checking crossing
+    detection_result = detect_all_people(cam_id)
+    
     if detection_result is None:
         raise HTTPException(status_code=500, detail="Detection process failed.")
 
@@ -83,3 +88,46 @@ def configure_continuous_detection(
             "enabled": config.enabled
         }
     }
+
+@router.post("/detect_from_image")
+async def detect_from_image(
+    camera_id: int = Query(..., description="Camera ID for the detection"),
+    file: UploadFile = File(..., description="Image file to process"),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Process an uploaded image for object detection.
+    
+    Args:
+        camera_id: ID of the camera associated with this detection
+        file: Uploaded image file to process
+        
+    Returns:
+        Detection results with bounding boxes, count, and status
+    """
+    # Read image from the uploaded file
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    
+    if img is None:
+        raise HTTPException(status_code=400, detail="Invalid image file.")
+    
+    # Run YOLO inference on the image
+    boxes, scores, labels = run_yolo_inference(img)
+    
+    # Filter detections with confidence > 50%
+    filtered_boxes = []
+    for i, box in enumerate(boxes):
+        if scores[i] > 0.5:  # Only keep boxes with confidence > 50%
+            filtered_boxes.append(box)
+    
+    # Create response in the standard format
+    response = {
+        "status": "people_detected" if filtered_boxes else "no_motion",
+        "bounding_boxes": filtered_boxes,
+        "crossing_detected": False,
+        "count": len(filtered_boxes)
+    }
+    
+    return response

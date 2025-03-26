@@ -3,6 +3,10 @@ from app.inference.pipeline import process_camera_stream
 from app.database.events import add_event
 from app.database.cameras import get_camera_by_id
 from datetime import datetime
+import cv2
+import numpy as np
+from app.database.calibration import fetch_calibration_for_camera
+from app.inference.detection import run_yolo_inference
 
 def detect_person_crossing(camera_id: int) -> Optional[Dict]:
     """
@@ -80,4 +84,125 @@ def detect_person_crossing(camera_id: int) -> Optional[Dict]:
                 "timestamp": timestamp
             }
 
+    return response
+
+def detect_all_people(camera_id: int) -> Optional[Dict]:
+    """
+    Detect all people in the camera feed without checking for line crossing.
+    Returns all detected bounding boxes regardless of crossing status.
+    
+    Args:
+        camera_id: ID of the camera to process.
+        
+    Returns:
+        Dictionary with:
+        - "status": "people_detected" if people found, "no_motion" otherwise
+        - "bounding_boxes": List of all detected bounding boxes
+        - "crossing_detected": Always False (crossing logic is disabled)
+        - "count": Number of people detected
+    """
+    # Fetch camera source path
+    camera = get_camera_by_id(camera_id)
+    if not camera:
+        return None
+    source_path = camera.get("source")
+    if not source_path:
+        return None
+    
+    # Default response
+    response = {
+        "status": "no_motion",
+        "bounding_boxes": [],
+        "crossing_detected": False,
+        "count": 0
+    }
+    
+    # Get calibration data to properly crop the frame
+    calib = fetch_calibration_for_camera(camera_id)
+    if not calib:
+        # Try to just process the full frame if no calibration
+        cap = cv2.VideoCapture(source_path)
+        if not cap.isOpened():
+            return response
+        
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            cap.release()
+            return response
+        
+        # Run detection on the frame
+        boxes, scores, labels = run_yolo_inference(frame)
+        
+        all_boxes = []
+        for i, box in enumerate(boxes):
+            if scores[i] > 0.5:  # Only keep boxes with confidence > 50%
+                all_boxes.append(box)
+        
+        # Update response
+        if all_boxes:
+            response = {
+                "status": "people_detected",
+                "bounding_boxes": all_boxes,
+                "crossing_detected": False,
+                "count": len(all_boxes)
+            }
+        
+        cap.release()
+        return response
+    
+    # Extract calibration data
+    square_data = calib["square"]
+    crop_x1, crop_y1, crop_x2, crop_y2 = (
+        int(square_data["crop_x1"]),
+        int(square_data["crop_y1"]),
+        int(square_data["crop_x2"]),
+        int(square_data["crop_y2"]),
+    )
+    
+    # Open the camera
+    cap = cv2.VideoCapture(source_path)
+    if not cap.isOpened():
+        return response
+    
+    ret, frame = cap.read()
+    if not ret or frame is None:
+        cap.release()
+        return response
+    
+    # Crop frame to detection area
+    try:
+        frame = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+    except:
+        # If cropping fails, use the full frame
+        pass
+    
+    # Resize for faster processing
+    detection_frame = cv2.resize(frame, (0, 0), fx=0.7, fy=0.7)
+    
+    # Run detection
+    boxes, scores, labels = run_yolo_inference(detection_frame)
+    
+    # Process results
+    all_boxes = []
+    for i, box in enumerate(boxes):
+        if scores[i] > 0.5:  # Only keep boxes with confidence > 50%
+            x_min, y_min, x_max, y_max = box
+            # Scale back to original size
+            scale_factor = 1.0 / 0.7
+            x_min = int(x_min * scale_factor)
+            y_min = int(y_min * scale_factor)
+            x_max = int(x_max * scale_factor)
+            y_max = int(y_max * scale_factor)
+            all_boxes.append([x_min, y_min, x_max, y_max])
+    
+    # Update response with detections
+    if all_boxes:
+        response = {
+            "status": "people_detected",
+            "bounding_boxes": all_boxes,
+            "crossing_detected": False,
+            "count": len(all_boxes)
+        }
+    
+    cap.release()
     return response

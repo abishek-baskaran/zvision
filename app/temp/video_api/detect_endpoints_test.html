@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZVision Detection API Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .card {
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .result {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            max-height: 400px;
+            overflow: auto;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid #ccc;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            border-radius: 4px 4px 0 0;
+        }
+        .tab.active {
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+            border-bottom: 1px solid white;
+            margin-bottom: -1px;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        canvas {
+            border: 1px solid #ddd;
+            margin-top: 10px;
+            max-width: 100%;
+        }
+        .flex-row {
+            display: flex;
+            gap: 20px;
+        }
+        .flex-column {
+            flex: 1;
+        }
+        .log {
+            max-height: 200px;
+            overflow-y: auto;
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-bottom: 1px solid #ddd;
+        }
+        .log-entry.error {
+            color: red;
+        }
+        .log-entry.success {
+            color: green;
+        }
+        .log-entry.info {
+            color: blue;
+        }
+    </style>
+</head>
+<body>
+    <h1>ZVision Detection API Test</h1>
+    
+    <div class="container">
+        <!-- Authentication Card -->
+        <div class="card">
+            <h2>Authentication</h2>
+            <div class="form-group">
+                <label for="baseUrl">Server Base URL:</label>
+                <input type="text" id="baseUrl" value="http://localhost:8000" placeholder="http://localhost:8000">
+            </div>
+            <div class="form-group">
+                <label for="username">Username:</label>
+                <input type="text" id="username" value="admin" placeholder="admin">
+            </div>
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" value="123456" placeholder="password">
+            </div>
+            <button id="loginBtn">Login</button>
+            <div class="form-group">
+                <label>Status:</label>
+                <div id="authStatus" class="result">Not authenticated</div>
+            </div>
+        </div>
+        
+        <!-- Camera Selection -->
+        <div class="card">
+            <h2>Camera Selection</h2>
+            <div class="form-group">
+                <label for="storeSelect">Select Store:</label>
+                <select id="storeSelect">
+                    <option value="">Select a store...</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="cameraSelect">Select Camera:</label>
+                <select id="cameraSelect">
+                    <option value="">Select a camera...</option>
+                </select>
+            </div>
+            <button id="loadCamerasBtn">Load Cameras</button>
+        </div>
+        
+        <!-- Tabs for Different Tests -->
+        <div class="tabs">
+            <div class="tab active" data-tab="standard-detection">Standard Detection</div>
+            <div class="tab" data-tab="webrtc-detection">WebRTC Detection</div>
+        </div>
+        
+        <!-- Standard Detection Tab -->
+        <div id="standard-detection" class="tab-content active">
+            <div class="card">
+                <h2>Standard Detection API Test</h2>
+                <p>Tests the <code>/api/detect</code> endpoint which runs server-side detection on camera feed.</p>
+                <div class="form-group">
+                    <label>Selected Camera ID: <span id="standardCameraId">None</span></label>
+                </div>
+                <button id="runStandardDetectionBtn" disabled>Run Standard Detection</button>
+                <div class="form-group">
+                    <label>Detection Result:</label>
+                    <div id="standardDetectionResult" class="result">No results yet</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- WebRTC Detection Tab -->
+        <div id="webrtc-detection" class="tab-content">
+            <div class="card">
+                <h2>WebRTC Detection API Test</h2>
+                <p>Tests the <code>/api/detect</code> endpoint from <code>detection_webrtc.py</code> which processes base64 images.</p>
+                
+                <div class="flex-row">
+                    <div class="flex-column">
+                        <div class="form-group">
+                            <label>Selected Camera ID: <span id="webrtcCameraId">None</span></label>
+                        </div>
+                        <div class="form-group">
+                            <label for="captureMethod">Capture Method:</label>
+                            <select id="captureMethod">
+                                <option value="camera">Local Camera</option>
+                                <option value="file">File Upload</option>
+                            </select>
+                        </div>
+                        <div id="cameraInputGroup" class="form-group">
+                            <label for="videoInput">Camera Input:</label>
+                            <select id="videoInput">
+                                <option value="">Loading cameras...</option>
+                            </select>
+                        </div>
+                        <div id="fileInputGroup" class="form-group" style="display:none;">
+                            <label for="imageFile">Upload Image:</label>
+                            <input type="file" id="imageFile" accept="image/*">
+                        </div>
+                        <button id="startCaptureBtn">Start Capture</button>
+                        <button id="captureFrameBtn" disabled>Capture Frame</button>
+                        <button id="stopCaptureBtn" disabled>Stop Capture</button>
+                    </div>
+                    
+                    <div class="flex-column">
+                        <div class="form-group">
+                            <label>Preview:</label>
+                            <video id="videoPreview" width="320" height="240" autoplay playsinline style="display:none;"></video>
+                            <canvas id="previewCanvas" width="320" height="240"></canvas>
+                        </div>
+                    </div>
+                </div>
+                
+                <button id="runWebRTCDetectionBtn" disabled>Run WebRTC Detection</button>
+                
+                <div class="form-group">
+                    <label>Detection Result:</label>
+                    <div id="webrtcDetectionResult" class="result">No results yet</div>
+                </div>
+                
+                <div class="form-group">
+                    <label>Result Visualization:</label>
+                    <canvas id="resultCanvas" width="640" height="480"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Logging Card -->
+        <div class="card">
+            <h2>Log</h2>
+            <div id="logContainer" class="log"></div>
+            <button id="clearLogBtn">Clear Log</button>
+        </div>
+    </div>
+    
+    <script>
+        // Global state
+        const state = {
+            token: null,
+            storeId: null,
+            cameraId: null,
+            camera: null,
+            videoStream: null,
+            captureInterval: null,
+            capturedImage: null
+        };
+        
+        // DOM Elements
+        const elements = {
+            // Auth
+            baseUrl: document.getElementById('baseUrl'),
+            username: document.getElementById('username'),
+            password: document.getElementById('password'),
+            loginBtn: document.getElementById('loginBtn'),
+            authStatus: document.getElementById('authStatus'),
+            
+            // Store & Camera
+            storeSelect: document.getElementById('storeSelect'),
+            cameraSelect: document.getElementById('cameraSelect'),
+            loadCamerasBtn: document.getElementById('loadCamerasBtn'),
+            
+            // Tabs
+            tabs: document.querySelectorAll('.tab'),
+            tabContents: document.querySelectorAll('.tab-content'),
+            
+            // Standard Detection
+            standardCameraId: document.getElementById('standardCameraId'),
+            runStandardDetectionBtn: document.getElementById('runStandardDetectionBtn'),
+            standardDetectionResult: document.getElementById('standardDetectionResult'),
+            
+            // WebRTC Detection
+            webrtcCameraId: document.getElementById('webrtcCameraId'),
+            captureMethod: document.getElementById('captureMethod'),
+            cameraInputGroup: document.getElementById('cameraInputGroup'),
+            fileInputGroup: document.getElementById('fileInputGroup'),
+            videoInput: document.getElementById('videoInput'),
+            imageFile: document.getElementById('imageFile'),
+            startCaptureBtn: document.getElementById('startCaptureBtn'),
+            captureFrameBtn: document.getElementById('captureFrameBtn'),
+            stopCaptureBtn: document.getElementById('stopCaptureBtn'),
+            videoPreview: document.getElementById('videoPreview'),
+            previewCanvas: document.getElementById('previewCanvas'),
+            runWebRTCDetectionBtn: document.getElementById('runWebRTCDetectionBtn'),
+            webrtcDetectionResult: document.getElementById('webrtcDetectionResult'),
+            resultCanvas: document.getElementById('resultCanvas'),
+            
+            // Logging
+            logContainer: document.getElementById('logContainer'),
+            clearLogBtn: document.getElementById('clearLogBtn')
+        };
+        
+        // Logging functions
+        function log(message, type = 'info') {
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-entry ${type}`;
+            logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            elements.logContainer.appendChild(logEntry);
+            elements.logContainer.scrollTop = elements.logContainer.scrollHeight;
+            
+            console.log(`[${type}] ${message}`);
+        }
+        
+        // Authentication
+        elements.loginBtn.addEventListener('click', async () => {
+            const baseUrl = elements.baseUrl.value.trim();
+            const username = elements.username.value.trim();
+            const password = elements.password.value.trim();
+            
+            if (!baseUrl || !username || !password) {
+                log('Please fill in all authentication fields', 'error');
+                return;
+            }
+            
+            try {
+                log(`Authenticating as ${username}...`);
+                elements.authStatus.textContent = 'Authenticating...';
+                
+                const response = await fetch(`${baseUrl}/api/token`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Authentication failed: ${response.status} ${response.statusText} - ${errorText}`);
+                }
+                
+                const data = await response.json();
+                state.token = data.access_token;
+                
+                elements.authStatus.textContent = `Authentication successful! Token: ${state.token.substring(0, 10)}...`;
+                log('Authentication successful', 'success');
+                
+                // Load stores after successful authentication
+                loadStores();
+                
+            } catch (error) {
+                elements.authStatus.textContent = `Error: ${error.message}`;
+                log(`Authentication error: ${error.message}`, 'error');
+            }
+        });
+        
+        // Load stores
+        async function loadStores() {
+            try {
+                const baseUrl = elements.baseUrl.value.trim();
+                
+                log('Loading stores...');
+                
+                const response = await fetch(`${baseUrl}/api/stores`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${state.token}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to load stores: ${response.status} ${response.statusText}`);
+                }
+                
+                const stores = await response.json();
+                
+                // Clear and populate store dropdown
+                elements.storeSelect.innerHTML = '<option value="">Select a store...</option>';
+                stores.forEach(store => {
+                    const option = document.createElement('option');
+                    option.value = store.store_id;
+                    option.textContent = store.store_name;
+                    elements.storeSelect.appendChild(option);
+                });
+                
+                log(`Loaded ${stores.length} stores`, 'success');
+                
+            } catch (error) {
+                log(`Error loading stores: ${error.message}`, 'error');
+            }
+        }
+        
+        // Load cameras for a store
+        elements.loadCamerasBtn.addEventListener('click', async () => {
+            const storeId = elements.storeSelect.value;
+            
+            if (!storeId) {
+                log('Please select a store', 'error');
+                return;
+            }
+            
+            try {
+                const baseUrl = elements.baseUrl.value.trim();
+                
+                log(`Loading cameras for store ${storeId}...`);
+                
+                const response = await fetch(`${baseUrl}/api/stores/${storeId}/cameras`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${state.token}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to load cameras: ${response.status} ${response.statusText}`);
+                }
+                
+                const cameras = await response.json();
+                
+                // Clear and populate camera dropdown
+                elements.cameraSelect.innerHTML = '<option value="">Select a camera...</option>';
+                cameras.forEach(camera => {
+                    const option = document.createElement('option');
+                    option.value = camera.camera_id;
+                    option.textContent = camera.camera_name;
+                    elements.cameraSelect.appendChild(option);
+                });
+                
+                log(`Loaded ${cameras.length} cameras for store ${storeId}`, 'success');
+                
+                // Update state
+                state.storeId = storeId;
+                
+                // Handle camera selection
+                elements.cameraSelect.addEventListener('change', () => {
+                    const cameraId = elements.cameraSelect.value;
+                    if (cameraId) {
+                        state.cameraId = cameraId;
+                        elements.standardCameraId.textContent = cameraId;
+                        elements.webrtcCameraId.textContent = cameraId;
+                        elements.runStandardDetectionBtn.disabled = false;
+                        log(`Selected camera ID: ${cameraId}`, 'info');
+                    } else {
+                        state.cameraId = null;
+                        elements.standardCameraId.textContent = 'None';
+                        elements.webrtcCameraId.textContent = 'None';
+                        elements.runStandardDetectionBtn.disabled = true;
+                    }
+                });
+                
+            } catch (error) {
+                log(`Error loading cameras: ${error.message}`, 'error');
+            }
+        });
+        
+        // Tab switching
+        elements.tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                // Deactivate all tabs
+                elements.tabs.forEach(t => t.classList.remove('active'));
+                elements.tabContents.forEach(c => c.classList.remove('active'));
+                
+                // Activate the clicked tab
+                tab.classList.add('active');
+                const tabId = tab.getAttribute('data-tab');
+                document.getElementById(tabId).classList.add('active');
+            });
+        });
+        
+        // Standard Detection API Test
+        elements.runStandardDetectionBtn.addEventListener('click', async () => {
+            if (!state.cameraId) {
+                log('Please select a camera first', 'error');
+                return;
+            }
+            
+            try {
+                const baseUrl = elements.baseUrl.value.trim();
+                
+                log(`Running standard detection for camera ${state.cameraId}...`);
+                elements.standardDetectionResult.textContent = 'Running detection...';
+                
+                const response = await fetch(`${baseUrl}/api/detect?camera_id=${state.cameraId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${state.token}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Detection failed: ${response.status} ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                
+                // Display result
+                elements.standardDetectionResult.textContent = JSON.stringify(result, null, 2);
+                log('Standard detection completed successfully', 'success');
+                
+            } catch (error) {
+                elements.standardDetectionResult.textContent = `Error: ${error.message}`;
+                log(`Standard detection error: ${error.message}`, 'error');
+            }
+        });
+        
+        // WebRTC related functions
+        // Populate video inputs (cameras)
+        async function loadVideoInputs() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                
+                elements.videoInput.innerHTML = '';
+                videoDevices.forEach(device => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.textContent = device.label || `Camera ${videoDevices.indexOf(device) + 1}`;
+                    elements.videoInput.appendChild(option);
+                });
+                
+                log(`Found ${videoDevices.length} video input devices`, 'info');
+                
+            } catch (error) {
+                log(`Error listing video devices: ${error.message}`, 'error');
+            }
+        }
+        
+        // Handle capture method change
+        elements.captureMethod.addEventListener('change', () => {
+            const method = elements.captureMethod.value;
+            
+            if (method === 'camera') {
+                elements.cameraInputGroup.style.display = 'block';
+                elements.fileInputGroup.style.display = 'none';
+                loadVideoInputs();
+            } else {
+                elements.cameraInputGroup.style.display = 'none';
+                elements.fileInputGroup.style.display = 'block';
+            }
+        });
+        
+        // Start video capture
+        elements.startCaptureBtn.addEventListener('click', async () => {
+            const method = elements.captureMethod.value;
+            
+            if (method === 'camera') {
+                try {
+                    const deviceId = elements.videoInput.value;
+                    
+                    // Stop any existing stream
+                    if (state.videoStream) {
+                        state.videoStream.getTracks().forEach(track => track.stop());
+                    }
+                    
+                    // Get user media with the selected device
+                    state.videoStream = await navigator.mediaDevices.getUserMedia({
+                        video: deviceId ? { deviceId: { exact: deviceId } } : true
+                    });
+                    
+                    // Set up video preview
+                    elements.videoPreview.srcObject = state.videoStream;
+                    elements.videoPreview.style.display = 'block';
+                    elements.captureFrameBtn.disabled = false;
+                    elements.stopCaptureBtn.disabled = false;
+                    elements.runWebRTCDetectionBtn.disabled = true;
+                    
+                    log('Camera capture started', 'success');
+                    
+                } catch (error) {
+                    log(`Error starting camera: ${error.message}`, 'error');
+                }
+            } else if (method === 'file') {
+                const file = elements.imageFile.files[0];
+                if (!file) {
+                    log('Please select an image file', 'error');
+                    return;
+                }
+                
+                try {
+                    // Load the image file
+                    const img = new Image();
+                    img.onload = () => {
+                        // Draw to canvas
+                        const ctx = elements.previewCanvas.getContext('2d');
+                        
+                        // Resize canvas to match image aspect ratio
+                        const aspectRatio = img.width / img.height;
+                        const canvasWidth = elements.previewCanvas.width;
+                        const canvasHeight = canvasWidth / aspectRatio;
+                        elements.previewCanvas.height = canvasHeight;
+                        
+                        ctx.drawImage(img, 0, 0, canvasWidth, canvasHeight);
+                        
+                        // Store the image data
+                        state.capturedImage = elements.previewCanvas.toDataURL('image/jpeg');
+                        elements.runWebRTCDetectionBtn.disabled = false;
+                        
+                        log('Image loaded successfully', 'success');
+                    };
+                    
+                    img.onerror = () => {
+                        log('Failed to load image file', 'error');
+                    };
+                    
+                    img.src = URL.createObjectURL(file);
+                    
+                } catch (error) {
+                    log(`Error loading image file: ${error.message}`, 'error');
+                }
+            }
+        });
+        
+        // Capture frame
+        elements.captureFrameBtn.addEventListener('click', () => {
+            if (!state.videoStream) {
+                log('No active video stream', 'error');
+                return;
+            }
+            
+            try {
+                // Draw the current video frame to canvas
+                const ctx = elements.previewCanvas.getContext('2d');
+                
+                // Resize canvas to match video aspect ratio
+                const aspectRatio = elements.videoPreview.videoWidth / elements.videoPreview.videoHeight;
+                const canvasWidth = elements.previewCanvas.width;
+                const canvasHeight = canvasWidth / aspectRatio;
+                elements.previewCanvas.height = canvasHeight;
+                
+                ctx.drawImage(elements.videoPreview, 0, 0, canvasWidth, canvasHeight);
+                
+                // Store the image data
+                state.capturedImage = elements.previewCanvas.toDataURL('image/jpeg');
+                elements.runWebRTCDetectionBtn.disabled = false;
+                
+                log('Frame captured successfully', 'success');
+                
+            } catch (error) {
+                log(`Error capturing frame: ${error.message}`, 'error');
+            }
+        });
+        
+        // Stop video capture
+        elements.stopCaptureBtn.addEventListener('click', () => {
+            if (state.videoStream) {
+                state.videoStream.getTracks().forEach(track => track.stop());
+                state.videoStream = null;
+                elements.videoPreview.srcObject = null;
+                elements.videoPreview.style.display = 'none';
+                elements.captureFrameBtn.disabled = true;
+                elements.stopCaptureBtn.disabled = true;
+                
+                log('Camera capture stopped', 'info');
+            }
+        });
+        
+        // Run WebRTC Detection
+        elements.runWebRTCDetectionBtn.addEventListener('click', async () => {
+            if (!state.cameraId) {
+                log('Please select a camera first', 'error');
+                return;
+            }
+            
+            if (!state.capturedImage) {
+                log('Please capture a frame or load an image first', 'error');
+                return;
+            }
+            
+            try {
+                const baseUrl = elements.baseUrl.value.trim();
+                
+                log(`Running WebRTC detection for camera ${state.cameraId}...`);
+                elements.webrtcDetectionResult.textContent = 'Running detection...';
+                
+                // Extract base64 data - remove "data:image/jpeg;base64," prefix
+                const base64Image = state.capturedImage.split(',')[1];
+                
+                const response = await fetch(`${baseUrl}/api/detect`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${state.token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        camera_id: state.cameraId.toString(),
+                        image: base64Image
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Detection failed: ${response.status} ${response.statusText} - ${errorText}`);
+                }
+                
+                const result = await response.json();
+                
+                // Display result
+                elements.webrtcDetectionResult.textContent = JSON.stringify(result, null, 2);
+                log('WebRTC detection completed successfully', 'success');
+                
+                // Draw the detection results on the canvas
+                drawDetectionResults(result.detections);
+                
+            } catch (error) {
+                elements.webrtcDetectionResult.textContent = `Error: ${error.message}`;
+                log(`WebRTC detection error: ${error.message}`, 'error');
+            }
+        });
+        
+        // Draw detection results
+        function drawDetectionResults(detections) {
+            // Get the canvas context
+            const canvas = elements.resultCanvas;
+            const ctx = canvas.getContext('2d');
+            
+            // Load the captured image onto the canvas
+            const img = new Image();
+            img.onload = () => {
+                // Resize canvas to match image aspect ratio
+                const aspectRatio = img.width / img.height;
+                canvas.width = 640;  // fixed width
+                canvas.height = canvas.width / aspectRatio;
+                
+                // Draw the image
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                
+                // Draw bounding boxes for detections
+                detections.forEach(detection => {
+                    const bbox = detection.bbox;
+                    const confidence = detection.confidence;
+                    const className = detection.class_name;
+                    
+                    // Calculate scaled coordinates
+                    const x = bbox[0] * canvas.width;
+                    const y = bbox[1] * canvas.height;
+                    const width = bbox[2] * canvas.width - x;
+                    const height = bbox[3] * canvas.height - y;
+                    
+                    // Draw bounding box
+                    ctx.strokeStyle = 'red';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(x, y, width, height);
+                    
+                    // Draw label
+                    ctx.fillStyle = 'red';
+                    ctx.font = '14px Arial';
+                    ctx.fillText(`${className} (${confidence.toFixed(2)})`, x, y - 5);
+                });
+            };
+            
+            img.src = state.capturedImage;
+        }
+        
+        // Clear log
+        elements.clearLogBtn.addEventListener('click', () => {
+            elements.logContainer.innerHTML = '';
+            log('Log cleared', 'info');
+        });
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            log('Application initialized', 'info');
+            
+            // Try to load video inputs if camera is selected
+            if (elements.captureMethod.value === 'camera') {
+                loadVideoInputs();
+            }
+        });
+    </script>
+</body>
+</html> 

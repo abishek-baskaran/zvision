@@ -347,7 +347,7 @@ def get_local_ip():
 
 # Print server banner
 local_ip = get_local_ip()
-port = args.port
+port = 8085
 print(f"""
 ┌───────────────────────────────────────────────┐
 │        ZVision WebRTC + Detection Test        │

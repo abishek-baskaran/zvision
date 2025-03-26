@@ -223,17 +223,19 @@
             username: '',
             password: '',
             token: '',
-            frameRate: 5
+            frameRate: 5,
+            frameInterval: 5 // Process every 5th frame by default
         };
         
         // Detection state
         const detection = {
             enabled: false,
             inProgress: false,
-            interval: null,
             currentFrame: null,
             lastDetectionTime: null,
-            boxes: []
+            boxes: [],
+            frameCount: 0,
+            processingInterval: null // For set/clearInterval
         };
         
         // DOM elements
@@ -264,17 +266,24 @@
             config.frameRate = parseInt(fps);
             frameRateValue.textContent = `${fps} FPS`;
             
+            // Update frame interval based on frame rate
+            // Lower frame rates mean higher intervals
+            config.frameInterval = Math.max(1, Math.round(30 / config.frameRate));
+            
             // Update detection frame rate on the server if it's running
             if (detection.enabled) {
                 try {
                     // Call the detection frame rate update endpoint
-                    const response = await fetch(`${config.apiUrl}/detection-webrtc/webrtc/${config.cameraId}/detect/update?token=${encodeURIComponent(config.token)}`, {
+                    const response = await fetch(`${config.apiUrl}/detection/config`, {
                         method: 'POST',
                         headers: {
-                            'Content-Type': 'application/json'
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${config.token}`
                         },
                         body: JSON.stringify({
-                            frame_rate: config.frameRate
+                            camera_id: parseInt(config.cameraId, 10),
+                            interval_seconds: Math.round(1.0 / config.frameRate),
+                            enabled: true
                         })
                     });
                     
@@ -632,6 +641,8 @@
             
             // Get frame rate from slider
             config.frameRate = parseInt(document.getElementById('frameRateSlider').value);
+            config.frameInterval = Math.max(1, Math.round(30 / config.frameRate));
+            
             updateStatus(`Starting detection at ${config.frameRate} FPS...`);
             
             try {
@@ -643,8 +654,8 @@
                         'Authorization': `Bearer ${config.token}`
                     },
                     body: JSON.stringify({
-                        camera_id: parseInt(config.cameraId, 10), // Ensure camera_id is an integer
-                        interval_seconds: Math.round(1.0 / config.frameRate), // Convert FPS to interval seconds as integer
+                        camera_id: parseInt(config.cameraId, 10),
+                        interval_seconds: Math.round(1.0 / config.frameRate),
                         enabled: true
                     })
                 });
@@ -659,12 +670,30 @@
                 
                 // Update detection state
                 detection.enabled = true;
+                detection.frameCount = 0;
                 detectionStatus.textContent = 'Running';
                 
-                // Start polling for detection results
-                detection.interval = setInterval(getDetectionStatus, 1000);
+                // Start frame processing at a fixed interval
+                // Clean up any existing interval
+                if (detection.processingInterval) {
+                    clearInterval(detection.processingInterval);
+                }
                 
-                logger.info(`Detection started at ${config.frameRate} FPS`);
+                // Calculate interval in milliseconds based on target frame rate
+                const intervalMs = Math.round(1000 / config.frameRate);
+                
+                // Set up regular interval for processing frames
+                detection.processingInterval = setInterval(() => {
+                    if (detection.enabled && videoElement.readyState === 4) {
+                        // Capture and process frame
+                        captureVideoFrame();
+                        if (detection.currentFrame && !detection.inProgress) {
+                            sendFrameForDetection(detection.currentFrame);
+                        }
+                    }
+                }, intervalMs);
+                
+                logger.info(`Detection started at ${config.frameRate} FPS (${intervalMs}ms interval)`);
                 return result;
             } catch (error) {
                 logger.error('Error starting detection:', error);
@@ -675,14 +704,15 @@
         
         // Stop detection using WebRTC detection API
         async function stopDetection() {
-            if (detection.interval) {
-                clearInterval(detection.interval);
-                detection.interval = null;
-            }
-            
             // Clear canvas
             if (context) {
                 context.clearRect(0, 0, detectionCanvas.width, detectionCanvas.height);
+            }
+            
+            // Clear processing interval
+            if (detection.processingInterval) {
+                clearInterval(detection.processingInterval);
+                detection.processingInterval = null;
             }
             
             try {
@@ -698,8 +728,8 @@
                             'Authorization': `Bearer ${config.token}`
                         },
                         body: JSON.stringify({
-                            camera_id: parseInt(config.cameraId, 10), // Ensure camera_id is an integer
-                            interval_seconds: 10, // Default interval
+                            camera_id: parseInt(config.cameraId, 10),
+                            interval_seconds: 10,
                             enabled: false
                         })
                     });
@@ -722,53 +752,6 @@
             }
         }
         
-        // Get detection status from the server
-        async function getDetectionStatus() {
-            if (!detection.enabled || !videoElement.srcObject) {
-                return;
-            }
-            
-            try {
-                // Trigger an on-demand detection for the current camera
-                // Using query parameter approach as shown in the API documentation
-                const response = await fetch(`${config.apiUrl}/detect?camera_id=${config.cameraId}`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${config.token}`
-                    }
-                    // No body needed when using query parameter
-                });
-                
-                if (!response.ok) {
-                    if (response.status === 404) {
-                        // Detection might have stopped on the server, stop locally too
-                        stopDetection();
-                        return;
-                    }
-                    throw new Error(`Server returned ${response.status}: ${response.statusText}`);
-                }
-                
-                const result = await response.json();
-                logger.debug(`Detection results received: ${result.detections ? result.detections.length : 0} detections`);
-                
-                if (result.detections && result.detections.length > 0) {
-                    // Process detection results
-                    const detectionResult = {
-                        camera_id: config.cameraId,
-                        timestamp: result.timestamp || Date.now() / 1000,
-                        detections: result.detections
-                    };
-                    
-                    detection.lastDetectionTime = new Date();
-                    
-                    processDetectionResults(detectionResult);
-                }
-            } catch (error) {
-                logger.error('Failed to get detection status:', error);
-            }
-        }
-        
         // Capture a frame from the video element
         function captureVideoFrame() {
             // Create temporary canvas to capture the frame
@@ -779,11 +762,73 @@
             const tempContext = tempCanvas.getContext('2d');
             tempContext.drawImage(videoElement, 0, 0, tempCanvas.width, tempCanvas.height);
             
-            // Store the captured frame for detection
-            detection.currentFrame = tempCanvas.toDataURL('image/jpeg', 0.8);
+            // Store the canvas element for detection instead of data URL
+            detection.currentFrame = tempCanvas;
         }
         
-        // This function is no longer needed as we're using client-side detection
+        // Send a frame to the server for detection
+        async function sendFrameForDetection(canvas) {
+            if (detection.inProgress) {
+                return; // Skip if a detection is already in progress
+            }
+            
+            detection.inProgress = true;
+            
+            try {
+                // Get the blob directly from canvas
+                const blob = await new Promise(resolve => {
+                    canvas.toBlob(resolve, 'image/jpeg', 0.8);
+                });
+                
+                // Create form data with the image blob
+                const formData = new FormData();
+                formData.append('file', blob, 'frame.jpg');
+                
+                // Send the image to the server for detection using the new endpoint
+                const response = await fetch(`${config.apiUrl}/detect_from_image?camera_id=${config.cameraId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${config.token}`
+                    },
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                
+                // Process detection results - adapting to new format
+                const boxes = result.bounding_boxes || [];
+                const count = result.count || 0;
+                const status = result.status || 'no_motion';
+                
+                if (boxes.length > 0) {
+                    // Create detection result in the format expected by processDetectionResults
+                    const detectionResult = {
+                        camera_id: config.cameraId,
+                        timestamp: Date.now() / 1000,
+                        detections: boxes.map((box, index) => ({
+                            bbox: box,
+                            confidence: 1.0, // Default confidence
+                            class_name: 'person'
+                        }))
+                    };
+                    
+                    detection.lastDetectionTime = new Date();
+                    processDetectionResults(detectionResult);
+                } else {
+                    // Clear canvas if no detections
+                    context.clearRect(0, 0, detectionCanvas.width, detectionCanvas.height);
+                    personCount.textContent = "0";
+                }
+            } catch (error) {
+                logger.error('Failed to process frame:', error);
+            } finally {
+                detection.inProgress = false;
+            }
+        }
         
         // Process detection results
         function processDetectionResults(results) {
