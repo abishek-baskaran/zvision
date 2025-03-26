@@ -216,6 +216,10 @@
     </div>
 
     <script>
+        // This implementation uses the new /detect_from_image endpoint for detection
+        // The WebRTC streaming and image detection run in parallel on the device
+        // Frames are captured at a specified interval and sent to the API for processing
+        
         // Configuration and state
         const config = {
             apiUrl: window.location.protocol + '//' + window.location.hostname + ':' + window.location.port + '/api', // Use the same server for API
@@ -223,19 +227,19 @@
             username: '',
             password: '',
             token: '',
-            frameRate: 5,
-            frameInterval: 5 // Process every 5th frame by default
+            frameRate: 5
         };
         
         // Detection state
         const detection = {
             enabled: false,
             inProgress: false,
+            interval: null,
             currentFrame: null,
             lastDetectionTime: null,
             boxes: [],
             frameCount: 0,
-            processingInterval: null // For set/clearInterval
+            processInterval: 1  // Process every nth frame
         };
         
         // DOM elements
@@ -266,24 +270,20 @@
             config.frameRate = parseInt(fps);
             frameRateValue.textContent = `${fps} FPS`;
             
-            // Update frame interval based on frame rate
-            // Lower frame rates mean higher intervals
-            config.frameInterval = Math.max(1, Math.round(30 / config.frameRate));
+            // Update processInterval based on frame rate
+            detection.processInterval = Math.max(1, Math.round(30 / config.frameRate));
             
             // Update detection frame rate on the server if it's running
             if (detection.enabled) {
                 try {
                     // Call the detection frame rate update endpoint
-                    const response = await fetch(`${config.apiUrl}/detection/config`, {
+                    const response = await fetch(`${config.apiUrl}/detection-webrtc/webrtc/${config.cameraId}/detect/update?token=${encodeURIComponent(config.token)}`, {
                         method: 'POST',
                         headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${config.token}`
+                            'Content-Type': 'application/json'
                         },
                         body: JSON.stringify({
-                            camera_id: parseInt(config.cameraId, 10),
-                            interval_seconds: Math.round(1.0 / config.frameRate),
-                            enabled: true
+                            frame_rate: config.frameRate
                         })
                     });
                     
@@ -641,60 +641,21 @@
             
             // Get frame rate from slider
             config.frameRate = parseInt(document.getElementById('frameRateSlider').value);
-            config.frameInterval = Math.max(1, Math.round(30 / config.frameRate));
-            
-            updateStatus(`Starting detection at ${config.frameRate} FPS...`);
+            detection.processInterval = Math.max(1, Math.round(30 / config.frameRate));
+            updateStatus(`Starting detection at ${config.frameRate} FPS (processing every ${detection.processInterval} frames)...`);
             
             try {
-                // Call the detection configuration endpoint to enable detection
-                const response = await fetch(`${config.apiUrl}/detection/config`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${config.token}`
-                    },
-                    body: JSON.stringify({
-                        camera_id: parseInt(config.cameraId, 10),
-                        interval_seconds: Math.round(1.0 / config.frameRate),
-                        enabled: true
-                    })
-                });
-                
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({}));
-                    throw new Error(`Server returned ${response.status}: ${errorData.detail || response.statusText}`);
-                }
-                
-                const result = await response.json();
-                logger.success(`Server detection started: ${result.message}`);
-                
                 // Update detection state
                 detection.enabled = true;
                 detection.frameCount = 0;
+                detection.inProgress = false;
                 detectionStatus.textContent = 'Running';
                 
-                // Start frame processing at a fixed interval
-                // Clean up any existing interval
-                if (detection.processingInterval) {
-                    clearInterval(detection.processingInterval);
-                }
+                // Set up frame processing with requestAnimationFrame
+                requestAnimationFrame(processVideoFrame);
                 
-                // Calculate interval in milliseconds based on target frame rate
-                const intervalMs = Math.round(1000 / config.frameRate);
-                
-                // Set up regular interval for processing frames
-                detection.processingInterval = setInterval(() => {
-                    if (detection.enabled && videoElement.readyState === 4) {
-                        // Capture and process frame
-                        captureVideoFrame();
-                        if (detection.currentFrame && !detection.inProgress) {
-                            sendFrameForDetection(detection.currentFrame);
-                        }
-                    }
-                }, intervalMs);
-                
-                logger.info(`Detection started at ${config.frameRate} FPS (${intervalMs}ms interval)`);
-                return result;
+                logger.success(`Detection started at ${config.frameRate} FPS using /detect_from_image endpoint`);
+                return { status: "detection_started" };
             } catch (error) {
                 logger.error('Error starting detection:', error);
                 detectionStatus.textContent = 'Error';
@@ -709,47 +670,36 @@
                 context.clearRect(0, 0, detectionCanvas.width, detectionCanvas.height);
             }
             
-            // Clear processing interval
-            if (detection.processingInterval) {
-                clearInterval(detection.processingInterval);
-                detection.processingInterval = null;
+            // Update detection state
+            detection.enabled = false;
+            detectionStatus.textContent = 'Stopped';
+            logger.info('Detection stopped');
+            updateStatus('Detection stopped');
+        }
+        
+        // Process video frames at the specified frame rate
+        function processVideoFrame() {
+            if (!detection.enabled || !videoElement.srcObject) {
+                return;
             }
             
-            try {
-                // Only call the server if detection was enabled
-                if (detection.enabled) {
-                    updateStatus('Stopping detection...');
-                    
-                    // Call the detection configuration endpoint to disable detection
-                    const response = await fetch(`${config.apiUrl}/detection/config`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${config.token}`
-                        },
-                        body: JSON.stringify({
-                            camera_id: parseInt(config.cameraId, 10),
-                            interval_seconds: 10,
-                            enabled: false
-                        })
-                    });
-                    
-                    if (!response.ok) {
-                        const errorData = await response.json().catch(() => ({}));
-                        throw new Error(`Server returned ${response.status}: ${errorData.detail || response.statusText}`);
-                    }
-                    
-                    const result = await response.json();
-                    logger.success(`Server detection stopped: ${result.message}`);
+            detection.frameCount++;
+            
+            // Process frames at the specified interval
+            if (detection.frameCount % detection.processInterval === 0) {
+                // Capture the current frame
+                captureVideoFrame();
+                
+                // Process the captured frame
+                if (detection.currentFrame) {
+                    // Log frame capture for debugging
+                    logger.debug(`Processing frame ${detection.frameCount} (interval: ${detection.processInterval})`);
+                    sendFrameForDetection(detection.currentFrame);
                 }
-            } catch (error) {
-                logger.error('Error stopping detection:', error);
-            } finally {
-                // Update detection state regardless of server response
-                detection.enabled = false;
-                detectionStatus.textContent = 'Stopped';
-                logger.info('Detection stopped');
             }
+            
+            // Continue the animation loop
+            requestAnimationFrame(processVideoFrame);
         }
         
         // Capture a frame from the video element
@@ -784,7 +734,7 @@
                 const formData = new FormData();
                 formData.append('file', blob, 'frame.jpg');
                 
-                // Send the image to the server for detection using the new endpoint
+                // Send the image to the server using the new detect_from_image endpoint
                 const response = await fetch(`${config.apiUrl}/detect_from_image?camera_id=${config.cameraId}`, {
                     method: 'POST',
                     headers: {
@@ -799,21 +749,18 @@
                 
                 const result = await response.json();
                 
-                // Process detection results - adapting to new format
-                const boxes = result.bounding_boxes || [];
-                const count = result.count || 0;
-                const status = result.status || 'no_motion';
-                
-                if (boxes.length > 0) {
-                    // Create detection result in the format expected by processDetectionResults
+                // Update the detection display
+                if (result.bounding_boxes && result.bounding_boxes.length > 0) {
                     const detectionResult = {
                         camera_id: config.cameraId,
                         timestamp: Date.now() / 1000,
-                        detections: boxes.map((box, index) => ({
-                            bbox: box,
-                            confidence: 1.0, // Default confidence
-                            class_name: 'person'
-                        }))
+                        detections: result.bounding_boxes.map(box => {
+                            return {
+                                bbox: box,
+                                class_name: 'person',
+                                confidence: 0.9  // Use default confidence if not provided
+                            };
+                        })
                     };
                     
                     detection.lastDetectionTime = new Date();
