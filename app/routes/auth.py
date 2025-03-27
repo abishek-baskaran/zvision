@@ -1,12 +1,16 @@
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
+import os
 
 from app.database.users import verify_user
 from app.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
+
+# Whether to enforce authentication (set to False for development)
+DEBUG = os.environ.get("ZVISION_DEBUG", "false").lower() == "true"
 
 router = APIRouter()
 
@@ -99,3 +103,20 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         return {"username": username, "is_admin": is_admin}
     except JWTError:
         raise credentials_exception 
+
+async def get_optional_user(request: Request):
+    """
+    A dependency that provides the current user if authenticated,
+    but allows unauthenticated access when DEBUG mode is enabled.
+    
+    Returns:
+        dict: User information if authenticated, None otherwise
+    """
+    if DEBUG:
+        # Skip authentication in debug mode
+        return {"id": 0, "username": "debug_user", "role": "admin"}
+    
+    try:
+        return await get_current_user(request)
+    except HTTPException:
+        return None 

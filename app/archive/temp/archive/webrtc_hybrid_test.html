@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC + WebSocket Hybrid Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        .video-container {
+            position: relative;
+            margin: 20px 0;
+            background-color: #000;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        video {
+            width: 100%;
+            max-height: 500px;
+            display: block;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        .controls {
+            margin: 20px 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background-color: #3367d6;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .input-group {
+            margin: 10px 0;
+            display: flex;
+            flex-direction: column;
+        }
+        label {
+            margin-bottom: 5px;
+        }
+        input, select {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .detection-box {
+            position: absolute;
+            border: 2px solid red;
+            box-sizing: border-box;
+        }
+        .detection-text {
+            position: absolute;
+            background-color: rgba(255, 0, 0, 0.7);
+            color: white;
+            padding: 2px 5px;
+            font-size: 12px;
+        }
+        .frame-rate-control {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+            flex-wrap: wrap;
+        }
+        .frame-rate-control label {
+            margin-right: 10px;
+            min-width: 150px;
+        }
+        .frame-rate-control input {
+            flex: 1;
+            max-width: 400px;
+            margin-right: 10px;
+        }
+        .frame-rate-control span {
+            min-width: 30px;
+        }
+        #logOutput {
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            background-color: #f8f8f8;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            margin-top: 20px;
+        }
+        .log-entry {
+            margin-bottom: 3px;
+        }
+        .log-info {
+            color: #333;
+        }
+        .log-error {
+            color: #d32f2f;
+        }
+        .log-warning {
+            color: #f57c00;
+        }
+        .log-success {
+            color: #388e3c;
+        }
+        .log-debug {
+            color: #0288d1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WebRTC + WebSocket Hybrid Test</h1>
+        
+        <div class="input-group">
+            <label for="apiUrl">API URL:</label>
+            <input type="text" id="apiUrl" value="http://localhost:8000/api" placeholder="http://localhost:8000/api">
+        </div>
+        
+        <div class="input-group">
+            <label for="cameraId">Camera ID:</label>
+            <input type="number" id="cameraId" value="1" min="1">
+        </div>
+        
+        <div class="input-group">
+            <label for="username">Username:</label>
+            <input type="text" id="username" value="admin" placeholder="Username">
+        </div>
+        
+        <div class="input-group">
+            <label for="password">Password:</label>
+            <input type="password" id="password" value="123456" placeholder="Password">
+        </div>
+        
+        <div class="frame-rate-control">
+            <label for="frameRateSlider">Detection Frame Rate:</label>
+            <input type="range" id="frameRateSlider" min="1" max="30" value="5">
+            <span id="frameRateValue">5 FPS</span>
+        </div>
+        
+        <div class="video-container">
+            <video id="videoElement" autoplay playsinline muted></video>
+            <canvas id="detectionCanvas"></canvas>
+        </div>
+        
+        <div class="controls">
+            <button id="startButton">Start</button>
+            <button id="stopButton" disabled>Stop</button>
+            <button id="testToken">Test Token</button>
+        </div>
+        
+        <div class="status" id="statusElement">Status: Disconnected</div>
+        <div id="logOutput"></div>
+    </div>
+
+    <script>
+        // Configuration and state
+        const config = {
+            apiUrl: '',
+            cameraId: 1,
+            token: '',
+            username: '',
+            password: '',
+            frameRate: 5
+        };
+        
+        let rtcSignalingConnection = null;
+        let rtcVideoConnection = null;
+        let detectionDataConnection = null;
+        let peerConnection = null;
+        let videoStream = null;
+        let isConnected = false;
+        let isVideoPlaying = false;
+        let lastReceivedFrame = null;
+        let lastDetectionData = null;
+        let videoFallbackMode = false;
+        let connectionId = null;
+        let videoSocket = null;
+        let wsFallbackActive = false;
+        
+        // DOM Elements
+        const videoElement = document.getElementById('videoElement');
+        const detectionCanvas = document.getElementById('detectionCanvas');
+        const statusElement = document.getElementById('statusElement');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const apiUrlInput = document.getElementById('apiUrl');
+        const cameraIdInput = document.getElementById('cameraId');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const frameRateSlider = document.getElementById('frameRateSlider');
+        const frameRateValue = document.getElementById('frameRateValue');
+        const logOutput = document.getElementById('logOutput');
+        
+        // Canvas context for drawing detection boxes
+        const ctx = detectionCanvas.getContext('2d');
+        
+        // Update frame rate display
+        frameRateSlider.addEventListener('input', () => {
+            const value = frameRateSlider.value;
+            config.frameRate = parseInt(value);
+            frameRateValue.textContent = `${value} FPS`;
+        });
+        
+        // Remote logging functionality
+        const consoleLog = {
+            log: (...args) => {
+                console.log(...args);
+                appendLogEntry('info', args.join(' '));
+            },
+            error: (...args) => {
+                console.error(...args);
+                appendLogEntry('error', args.join(' '));
+            },
+            warn: (...args) => {
+                console.warn(...args);
+                appendLogEntry('warning', args.join(' '));
+            },
+            info: (...args) => {
+                console.info(...args);
+                appendLogEntry('info', args.join(' '));
+            },
+            debug: (...args) => {
+                console.debug(...args);
+                appendLogEntry('debug', args.join(' '));
+            },
+            success: (...args) => {
+                appendLogEntry('success', args.join(' '));
+            }
+        };
+        
+        function appendLogEntry(type, message) {
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${message}`;
+            logOutput.appendChild(entry);
+            logOutput.scrollTop = logOutput.scrollHeight;
+            
+            // Limit log entries to 100
+            while (logOutput.children.length > 100) {
+                logOutput.removeChild(logOutput.firstChild);
+            }
+        }
+        
+        // Event listeners
+        startButton.addEventListener('click', startStreaming);
+        stopButton.addEventListener('click', stopStreaming);
+        document.getElementById('testToken').addEventListener('click', async () => {
+            consoleLog.info('Testing token acquisition...');
+            const success = await getToken();
+            if (success) {
+                consoleLog.success('Token test successful!');
+                alert('Authentication successful! Token: ' + config.token.substring(0, 20) + '...');
+            } else {
+                consoleLog.error('Token test failed!');
+                alert('Authentication failed! Check console for details.');
+            }
+        });
+        
+        // Handle video sizing and canvas resizing
+        function resizeCanvas() {
+            detectionCanvas.width = videoElement.clientWidth;
+            detectionCanvas.height = videoElement.clientHeight;
+        }
+        
+        window.addEventListener('resize', resizeCanvas);
+        videoElement.addEventListener('loadedmetadata', resizeCanvas);
+        
+        // Get authentication token
+        async function getToken() {
+            config.apiUrl = apiUrlInput.value.trim();
+            config.username = usernameInput.value.trim();
+            config.password = passwordInput.value.trim();
+            
+            consoleLog.info(`Attempting authentication to ${config.apiUrl}/token with username: ${config.username}`);
+            
+            try {
+                const response = await fetch(`${config.apiUrl}/token`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: `username=${encodeURIComponent(config.username)}&password=${encodeURIComponent(config.password)}`
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    consoleLog.error(`Authentication failed: ${response.status} ${response.statusText}`);
+                    consoleLog.error(`Error details: ${errorText}`);
+                    throw new Error(`Authentication failed: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                config.token = data.access_token;
+                consoleLog.success(`Authentication successful! Token: ${config.token.substring(0, 10)}...`);
+                return true;
+            } catch (error) {
+                consoleLog.error('Failed to get authentication token:', error.message);
+                updateStatus(`Authentication failed: ${error.message}`);
+                return false;
+            }
+        }
+        
+        // Start streaming
+        async function startStreaming() {
+            if (isConnected) return;
+            
+            // Update config
+            config.cameraId = parseInt(cameraIdInput.value);
+            
+            // Disable start button during connection
+            startButton.disabled = true;
+            updateStatus('Authenticating...');
+            
+            // Get authentication token
+            if (!await getToken()) {
+                startButton.disabled = false;
+                return;
+            }
+            
+            updateStatus('Connecting...');
+            
+            try {
+                await connectWebRTC();
+                
+                // If WebRTC failed, fall back to WebSocket
+                if (!isVideoPlaying && videoFallbackMode) {
+                    updateStatus('Falling back to WebSocket video...');
+                    await connectVideoWebSocket();
+                }
+                
+                // Connect to detection data WebSocket in parallel
+                await connectDetectionWebSocket();
+                
+                isConnected = true;
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                updateStatus('Connected');
+            } catch (error) {
+                consoleLog.error('Failed to start streaming:', error.message);
+                updateStatus(`Connection failed: ${error.message}`);
+                stopStreaming();
+            }
+        }
+        
+        // Stop streaming
+        async function stopStreaming() {
+            updateStatus('Disconnecting...');
+            
+            // Close RTCPeerConnection
+            if (peerConnection) {
+                // Close data channel
+                if (dataChannel) {
+                    dataChannel.close();
+                    consoleLog.info('Data channel closed');
+                }
+                
+                // Close WebRTC connection
+                peerConnection.close();
+                peerConnection = null;
+            }
+            
+            // Close signaling WebSocket
+            if (rtcSignalingConnection) {
+                rtcSignalingConnection.close();
+                rtcSignalingConnection = null;
+            }
+            
+            // Close video WebSocket
+            if (rtcVideoConnection) {
+                rtcVideoConnection.close();
+                rtcVideoConnection = null;
+            }
+            
+            // Close detection data WebSocket
+            if (detectionDataConnection) {
+                detectionDataConnection.close();
+                detectionDataConnection = null;
+            }
+            
+            // Reset flags and UI
+            isConnected = false;
+            isVideoPlaying = false;
+            videoFallbackMode = false;
+            wsFallbackActive = false;
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            updateStatus('Disconnected');
+        }
+        
+        // Connect to WebRTC
+        async function connectWebRTC() {
+            return new Promise(async (resolve, reject) => {
+                try {
+                    // Connect to signaling WebSocket
+                    const wsUrl = `${config.apiUrl.replace('http', 'ws')}/ws/rtc-signaling/${config.cameraId}?token=${config.token}`;
+                    rtcSignalingConnection = new WebSocket(wsUrl);
+                    
+                    // Set timeout for connection
+                    const connectionTimeout = setTimeout(() => {
+                        if (!isVideoPlaying) {
+                            consoleLog.warn('WebRTC connection timed out, falling back to WebSocket video');
+                            videoFallbackMode = true;
+                            resolve();
+                        }
+                    }, 5000);
+                    
+                    rtcSignalingConnection.onopen = async () => {
+                        updateStatus('Signaling connection established');
+                        consoleLog.success('WebRTC signaling connection opened');
+                    };
+                    
+                    rtcSignalingConnection.onmessage = async (event) => {
+                        const message = JSON.parse(event.data);
+                        consoleLog.debug('WebRTC signaling message received:', message.type);
+                        
+                        if (message.type === 'connected') {
+                            // Store connection ID for further API requests
+                            connectionId = message.connection_id;
+                            consoleLog.success('WebRTC signaling connected with ID:', connectionId);
+                            
+                            // Create RTCPeerConnection
+                            try {
+                                await createPeerConnection();
+                            } catch (error) {
+                                consoleLog.error('Failed to create peer connection:', error.message);
+                                videoFallbackMode = true;
+                                clearTimeout(connectionTimeout);
+                                resolve();
+                            }
+                        } else if (message.type === 'answer') {
+                            // Set remote description from answer
+                            try {
+                                await setRemoteDescription(message);
+                            } catch (error) {
+                                consoleLog.error('Failed to set remote description:', error.message);
+                            }
+                        } else if (message.type === 'ice_candidate_received') {
+                            // Get ICE candidates if needed
+                            consoleLog.debug('ICE candidate received by server');
+                        } else if (message.type === 'error') {
+                            consoleLog.error('WebRTC signaling error:', message.message);
+                        } else if (message.type === 'frame') {
+                            // This is only for debugging - actual video frames will come through the peer connection
+                            consoleLog.debug('Received frame via signaling channel (for debugging)');
+                        }
+                    };
+                    
+                    rtcSignalingConnection.onclose = () => {
+                        consoleLog.warn('WebRTC signaling connection closed');
+                        if (!isVideoPlaying && !videoFallbackMode) {
+                            videoFallbackMode = true;
+                            clearTimeout(connectionTimeout);
+                            resolve();
+                        }
+                    };
+                    
+                    rtcSignalingConnection.onerror = (error) => {
+                        consoleLog.error('WebRTC signaling error:', error);
+                        if (!isVideoPlaying) {
+                            videoFallbackMode = true;
+                            clearTimeout(connectionTimeout);
+                            resolve();
+                        }
+                    };
+                    
+                } catch (error) {
+                    consoleLog.error('Failed to connect WebRTC:', error.message);
+                    videoFallbackMode = true;
+                    resolve();
+                }
+            });
+        }
+        
+        // Create WebRTC peer connection
+        async function createPeerConnection() {
+            peerConnection = new RTCPeerConnection({
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' }
+                ]
+            });
+            
+            peerConnection.onicecandidate = async (event) => {
+                if (event.candidate) {
+                    // Send ICE candidate to signaling channel
+                    if (rtcSignalingConnection && rtcSignalingConnection.readyState === WebSocket.OPEN) {
+                        rtcSignalingConnection.send(JSON.stringify({
+                            type: 'ice_candidate',
+                            candidate: event.candidate
+                        }));
+                        consoleLog.debug('ICE candidate sent to server');
+                    }
+                }
+            };
+            
+            peerConnection.ontrack = (event) => {
+                consoleLog.success('Received remote track from WebRTC');
+                videoElement.srcObject = event.streams[0];
+                videoStream = event.streams[0];
+                isVideoPlaying = true;
+            };
+            
+            peerConnection.oniceconnectionstatechange = () => {
+                consoleLog.debug('ICE connection state:', peerConnection.iceConnectionState);
+                if (peerConnection.iceConnectionState === 'failed' || 
+                    peerConnection.iceConnectionState === 'disconnected' || 
+                    peerConnection.iceConnectionState === 'closed') {
+                    consoleLog.warn('ICE connection failed or closed');
+                    if (!isVideoPlaying) {
+                        videoFallbackMode = true;
+                    }
+                }
+            };
+            
+            // Create data channel for additional communication if needed
+            const dataChannel = peerConnection.createDataChannel('data');
+            dataChannel.onopen = () => consoleLog.success('Data channel opened');
+            dataChannel.onclose = () => consoleLog.warn('Data channel closed');
+            dataChannel.onmessage = (event) => consoleLog.debug('Data channel message:', event.data);
+            
+            try {
+                // Create offer
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                // Send offer to signaling channel
+                if (rtcSignalingConnection && rtcSignalingConnection.readyState === WebSocket.OPEN) {
+                    rtcSignalingConnection.send(JSON.stringify({
+                        type: 'offer',
+                        sdp: offer.sdp
+                    }));
+                    consoleLog.success('WebRTC offer sent to server');
+                }
+            } catch (error) {
+                consoleLog.error('Failed to create or send offer:', error.message);
+                throw error;
+            }
+        }
+        
+        // Set remote description (answer from server)
+        async function setRemoteDescription(answer) {
+            try {
+                consoleLog.info('Setting remote description from answer');
+                
+                // Clean up the fingerprint if it contains placeholders
+                if (answer.sdp && answer.sdp.includes('XX:XX:XX:XX')) {
+                    consoleLog.warning('Found placeholder fingerprint, skipping WebRTC and using WebSocket fallback');
+                    startWebSocketFallback();
+                    return false;
+                }
+                
+                await peerConnection.setRemoteDescription(answer);
+                consoleLog.success('Remote description set successfully');
+                return true;
+            } catch (error) {
+                consoleLog.error('Failed to set remote description:', error.message);
+                startWebSocketFallback();
+                return false;
+            }
+        }
+        
+        // Start WebSocket fallback for video
+        function startWebSocketFallback() {
+            consoleLog.info('WebRTC connection timed out, falling back to WebSocket video');
+            
+            // Close any existing video WebSocket
+            if (videoSocket && videoSocket.readyState === WebSocket.OPEN) {
+                videoSocket.close();
+            }
+            
+            // Connect to video WebSocket
+            const videoUrl = `ws://${config.apiUrl.replace('http://', '').replace('https://', '').replace('/api', '')}/api/ws/rtc-video/${config.cameraId}?token=${config.token}`;
+            videoSocket = new WebSocket(videoUrl);
+            
+            videoSocket.onopen = () => {
+                consoleLog.info('Video WebSocket connection opened');
+            };
+            
+            videoSocket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                // Handle frame data
+                if (data.frame) {
+                    if (!wsFallbackActive) {
+                        consoleLog.success('Connected to video WebSocket');
+                        wsFallbackActive = true;
+                        updateStatus('Connected via WebSocket');
+                    }
+                    
+                    // Display the frame
+                    displayFrame(data.frame);
+                }
+            };
+            
+            videoSocket.onclose = () => {
+                consoleLog.info('Video WebSocket connection closed');
+                wsFallbackActive = false;
+            };
+            
+            videoSocket.onerror = (error) => {
+                consoleLog.error('Video WebSocket error:', error);
+            };
+        }
+        
+        // Connect to Video WebSocket as fallback
+        async function connectVideoWebSocket() {
+            return new Promise((resolve, reject) => {
+                try {
+                    const wsUrl = `${config.apiUrl.replace('http', 'ws')}/ws/rtc-video/${config.cameraId}?token=${config.token}`;
+                    rtcVideoConnection = new WebSocket(wsUrl);
+                    
+                    rtcVideoConnection.onopen = () => {
+                        updateStatus('Video WebSocket connection established');
+                        consoleLog.success('Video WebSocket connection opened');
+                        resolve();
+                    };
+                    
+                    rtcVideoConnection.onmessage = (event) => {
+                        const message = JSON.parse(event.data);
+                        
+                        if (message.status === 'connected') {
+                            consoleLog.success('Connected to video WebSocket');
+                        } else if (message.frame) {
+                            // Display the frame
+                            lastReceivedFrame = message;
+                            displayVideoFrame(message.frame);
+                        } else if (message.type === 'error') {
+                            consoleLog.error('Video WebSocket error:', message.message);
+                        }
+                    };
+                    
+                    rtcVideoConnection.onclose = () => {
+                        consoleLog.warn('Video WebSocket connection closed');
+                        if (isConnected) {
+                            stopStreaming();
+                        }
+                    };
+                    
+                    rtcVideoConnection.onerror = (error) => {
+                        consoleLog.error('Video WebSocket error:', error);
+                        reject(new Error('Video WebSocket connection failed'));
+                    };
+                } catch (error) {
+                    consoleLog.error('Failed to connect to Video WebSocket:', error.message);
+                    reject(error);
+                }
+            });
+        }
+        
+        // Display video frame from WebSocket
+        function displayVideoFrame(base64Frame) {
+            const img = new Image();
+            img.onload = () => {
+                // Clear previous frame
+                videoElement.style.display = 'none';
+                
+                // Set canvas size if needed
+                if (detectionCanvas.width !== img.width || detectionCanvas.height !== img.height) {
+                    detectionCanvas.width = img.width;
+                    detectionCanvas.height = img.height;
+                }
+                
+                // Draw the frame
+                ctx.drawImage(img, 0, 0, detectionCanvas.width, detectionCanvas.height);
+                
+                // Draw detection boxes if available
+                if (lastDetectionData && lastDetectionData.detections) {
+                    drawDetectionBoxes(lastDetectionData.detections);
+                }
+                
+                isVideoPlaying = true;
+            };
+            img.onerror = () => {
+                consoleLog.error('Failed to load video frame');
+            };
+            img.src = 'data:image/jpeg;base64,' + base64Frame;
+        }
+        
+        // Connect to Detection WebSocket
+        async function connectDetectionWebSocket() {
+            return new Promise((resolve, reject) => {
+                try {
+                    const wsUrl = `${config.apiUrl.replace('http', 'ws')}/ws/detection-data/${config.cameraId}?token=${config.token}&frame_rate=${config.frameRate}`;
+                    detectionDataConnection = new WebSocket(wsUrl);
+                    
+                    detectionDataConnection.onopen = () => {
+                        updateStatus('Detection WebSocket connection established');
+                        consoleLog.success('Detection WebSocket connection opened');
+                        resolve();
+                    };
+                    
+                    detectionDataConnection.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            
+                            if (data.status === 'connected') {
+                                consoleLog.success('Connected to detection data WebSocket');
+                            } else if (data.detections !== undefined) {
+                                // Store detection data
+                                lastDetectionData = data;
+                                
+                                // Update detection status
+                                const numDetections = Array.isArray(data.detections) ? data.detections.length : 0;
+                                updateStatus(`Connected - ${numDetections} detections`);
+                                
+                                // Draw detection boxes if video is playing
+                                if (isVideoPlaying) {
+                                    drawDetectionBoxes(data.detections);
+                                }
+                            }
+                        } catch (error) {
+                            consoleLog.error('Error processing detection message:', error.message);
+                        }
+                    };
+                    
+                    detectionDataConnection.onclose = () => {
+                        consoleLog.warn('Detection WebSocket connection closed');
+                    };
+                    
+                    detectionDataConnection.onerror = (error) => {
+                        consoleLog.error('Detection WebSocket error:', error);
+                        reject(new Error('Detection WebSocket connection failed'));
+                    };
+                } catch (error) {
+                    consoleLog.error('Failed to connect to Detection WebSocket:', error.message);
+                    reject(error);
+                }
+            });
+        }
+        
+        // Draw detection boxes on canvas
+        function drawDetectionBoxes(detections) {
+            if (!detections || !Array.isArray(detections) || detections.length === 0) {
+                return;
+            }
+            
+            // If using WebSocket video mode (fallback), we already have the frame on canvas
+            // If using WebRTC, we need to draw on top of the video
+            if (!videoFallbackMode) {
+                // Clear previous drawings
+                ctx.clearRect(0, 0, detectionCanvas.width, detectionCanvas.height);
+            }
+            
+            // Draw each detection box
+            detections.forEach(detection => {
+                const { x, y, width, height, label, confidence } = detection;
+                
+                // Calculate scaled coordinates (assuming detection coordinates are normalized 0-1)
+                let boxX, boxY, boxWidth, boxHeight;
+                
+                if (x >= 0 && x <= 1 && y >= 0 && y <= 1 && width >= 0 && width <= 1 && height >= 0 && height <= 1) {
+                    // Normalized coordinates
+                    boxX = x * detectionCanvas.width;
+                    boxY = y * detectionCanvas.height;
+                    boxWidth = width * detectionCanvas.width;
+                    boxHeight = height * detectionCanvas.height;
+                } else {
+                    // Absolute pixel coordinates
+                    boxX = x;
+                    boxY = y;
+                    boxWidth = width;
+                    boxHeight = height;
+                }
+                
+                // Draw the box
+                ctx.strokeStyle = 'red';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+                
+                // Draw label with confidence
+                const displayText = label ? `${label} ${Math.round(confidence * 100)}%` : `${Math.round(confidence * 100)}%`;
+                ctx.fillStyle = 'rgba(255, 0, 0, 0.7)';
+                ctx.fillRect(boxX, boxY - 20, ctx.measureText(displayText).width + 10, 20);
+                ctx.fillStyle = 'white';
+                ctx.font = '12px Arial';
+                ctx.fillText(displayText, boxX + 5, boxY - 5);
+            });
+        }
+        
+        // Update status display
+        function updateStatus(message) {
+            statusElement.textContent = `Status: ${message}`;
+        }
+        
+        // Initialize with default values
+        window.addEventListener('DOMContentLoaded', () => {
+            // Set initial frame rate display
+            frameRateValue.textContent = `${frameRateSlider.value} FPS`;
+            
+            // Initialize video element
+            videoElement.addEventListener('play', () => {
+                resizeCanvas();
+                isVideoPlaying = true;
+            });
+            
+            consoleLog.info('WebRTC + WebSocket Hybrid Test page loaded');
+        });
+    </script>
+</body>
+</html> 

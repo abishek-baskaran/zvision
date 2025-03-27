@@ -1,23 +1,19 @@
 import cv2
 import os
-import logging
-from fastapi import APIRouter, HTTPException, Response, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Response, Depends, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 
 from app.database.cameras import add_camera, get_cameras_for_store, get_camera_by_id
 from app.database.stores import get_store_by_id
 from app.database.connection import get_connection
-from app.routes.auth import get_current_user, get_optional_user
+from app.routes.auth import get_current_user
 from app.database.calibration import store_calibration, fetch_calibration_for_camera
 
 # Import the new camera manager
 from app.camera_manager import camera_manager
 
 router = APIRouter()
-# Configure logging
-logger = logging.getLogger(__name__)
 
 class CameraCreate(BaseModel):
     store_id: int
@@ -49,12 +45,6 @@ class CalibrationData(BaseModel):
     orientation: str = "leftToRight"  # Default value if not provided
     frame_rate: int = 5  # Default value of 5 FPS if not provided
 
-# Direct camera management endpoints (no authentication required)
-class CameraAddRequest(BaseModel):
-    camera_id: int
-    source: str
-    enable_detection: bool = False
-
 @router.post("/cameras", response_model=CameraResponse)
 def create_camera(cam_data: CameraCreate, current_user: dict = Depends(get_current_user)):
     """
@@ -75,7 +65,7 @@ def create_camera(cam_data: CameraCreate, current_user: dict = Depends(get_curre
     )
 
 @router.get("/cameras", response_model=List[CameraResponse])
-def list_cameras(store_id: Optional[int] = None, current_user: dict = Depends(get_optional_user)):
+def list_cameras(store_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """
     List cameras, optionally filtered by store_id.
     """
@@ -466,142 +456,3 @@ def get_all_cameras_status(current_user: dict = Depends(get_current_user)):
     
     # Convert to a list
     return list(statuses.values())
-
-@router.get("/camera/list")
-def list_active_cameras():
-    """
-    List all active cameras managed by the camera_manager.
-    Does not require authentication for testing.
-    """
-    cameras = []
-    for camera_id, camera in camera_manager.cameras.items():
-        cameras.append({
-            "camera_id": camera_id,
-            "source": camera.source_path,
-            "status": camera_manager.get_camera_status(camera_id)
-        })
-    
-    # If no cameras are available, return a more informative response
-    if not cameras:
-        return {
-            "cameras": [],
-            "count": 0,
-            "message": "No active cameras found. Use the /api/camera/add endpoint to add a camera."
-        }
-    
-    return {
-        "cameras": cameras,
-        "count": len(cameras),
-        "message": "Active cameras retrieved successfully"
-    }
-
-@router.post("/camera/add")
-def add_camera_direct(camera_data: CameraAddRequest):
-    """
-    Add a camera directly to the camera_manager.
-    Does not require authentication for testing.
-    """
-    try:
-        camera = camera_manager.get_camera(
-            camera_data.camera_id, 
-            camera_data.source,
-            enable_detection=camera_data.enable_detection
-        )
-        
-        # Get the camera status to verify it started properly
-        status = camera_manager.get_camera_status(camera_data.camera_id)
-        
-        return {
-            "camera_id": camera_data.camera_id,
-            "source": camera_data.source,
-            "status": status.get("status", "starting"),
-            "detection_enabled": camera_data.enable_detection,
-            "message": "Camera added successfully"
-        }
-        
-    except Exception as e:
-        # Log the error and return a meaningful response
-        logger.error(f"Failed to add camera: {str(e)}")
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Failed to add camera: {str(e)}"
-        )
-
-@router.get("/camera/{camera_id}/status")
-def get_camera_status_direct(camera_id: int):
-    """
-    Get status of a specific camera from the camera_manager.
-    Does not require authentication for testing.
-    """
-    status = camera_manager.get_camera_status(camera_id)
-    if not status:
-        raise HTTPException(status_code=404, detail=f"Camera {camera_id} not found")
-    
-    return status
-
-@router.get("/camera/{camera_id}/enable_detection")
-def enable_camera_detection(camera_id: int):
-    """
-    Enable detection for a specific camera.
-    Does not require authentication for testing.
-    """
-    # Check if camera exists
-    if camera_id not in camera_manager.cameras:
-        raise HTTPException(status_code=404, detail=f"Camera {camera_id} not found")
-    
-    try:
-        success = camera_manager.enable_detection(camera_id)
-        if success:
-            return {"camera_id": camera_id, "status": "detection_enabled", "message": "Detection enabled successfully"}
-        else:
-            return {"camera_id": camera_id, "status": "error", "message": "Failed to enable detection"}
-    except Exception as e:
-        logger.error(f"Failed to enable detection for camera {camera_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to enable detection: {str(e)}")
-
-@router.get("/camera/{camera_id}/disable_detection")
-def disable_camera_detection(camera_id: int):
-    """
-    Disable detection for a specific camera.
-    Does not require authentication for testing.
-    """
-    # Check if camera exists
-    if camera_id not in camera_manager.cameras:
-        raise HTTPException(status_code=404, detail=f"Camera {camera_id} not found")
-    
-    try:
-        success = camera_manager.disable_detection(camera_id)
-        if success:
-            return {"camera_id": camera_id, "status": "detection_disabled", "message": "Detection disabled successfully"}
-        else:
-            return {"camera_id": camera_id, "status": "error", "message": "Failed to disable detection"}
-    except Exception as e:
-        logger.error(f"Failed to disable detection for camera {camera_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to disable detection: {str(e)}")
-
-@router.get("/camera/{camera_id}/detection/status")
-def get_camera_detection_status(camera_id: int):
-    """
-    Get detection status for a specific camera.
-    Does not require authentication for testing.
-    """
-    # Check if camera exists
-    if camera_id not in camera_manager.cameras:
-        raise HTTPException(status_code=404, detail=f"Camera {camera_id} not found")
-    
-    try:
-        # Get camera status which includes detection information
-        status = camera_manager.get_camera_status(camera_id)
-        
-        # Extract detection-specific information
-        detection_enabled = status.get('detection_enabled', False)
-        detection_status = status.get('detection', {})
-        
-        return {
-            "camera_id": camera_id,
-            "detection_enabled": detection_enabled,
-            "detection_status": detection_status
-        }
-    except Exception as e:
-        logger.error(f"Failed to get detection status for camera {camera_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get detection status: {str(e)}")

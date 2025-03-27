@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZVision WebSocket Video Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            border-radius: 5px;
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        .video-container {
+            position: relative;
+            margin-top: 20px;
+        }
+        #video-display {
+            display: block;
+            max-width: 100%;
+            border: 1px solid #ddd;
+        }
+        #detection-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+        .controls {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f8f8f8;
+            border-radius: 5px;
+        }
+        .counters {
+            display: flex;
+            margin-top: 15px;
+        }
+        .counter {
+            flex: 1;
+            text-align: center;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+            margin: 0 5px;
+        }
+        .counter.entry {
+            border-left: 5px solid #4CAF50;
+        }
+        .counter.exit {
+            border-left: 5px solid #F44336;
+        }
+        .event-display {
+            min-height: 30px;
+            margin: 15px 0;
+            padding: 10px;
+            border-radius: 5px;
+            background-color: #f8f8f8;
+        }
+        input, button {
+            padding: 8px;
+            margin: 5px 0;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            padding: 10px 15px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .connected {
+            background-color: #dff0d8;
+            color: #3c763d;
+        }
+        .disconnected {
+            background-color: #f2dede;
+            color: #a94442;
+        }
+        .status-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-dot.connected {
+            background-color: #4CAF50;
+        }
+        .status-dot.disconnected {
+            background-color: #F44336;
+        }
+        .fps-display {
+            margin-top: 10px;
+            font-family: monospace;
+        }
+        #debug-log {
+            height: 100px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            background-color: #222;
+            color: #0f0;
+            padding: 10px;
+            margin-top: 20px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ZVision WebSocket Video Test</h1>
+        
+        <div class="controls">
+            <div>
+                <label for="camera-id">Camera ID:</label>
+                <input type="number" id="camera-id" value="1" min="1">
+            </div>
+            <div>
+                <label for="username">Username:</label>
+                <input type="text" id="username" value="admin">
+            </div>
+            <div>
+                <label for="password">Password:</label>
+                <input type="password" id="password" value="123456">
+            </div>
+            <div>
+                <label for="server-address">Server Address:</label>
+                <input type="text" id="server-address" value="localhost:8000">
+            </div>
+            <button id="connect-btn">Connect</button>
+            <button id="disconnect-btn" disabled>Disconnect</button>
+            
+            <div id="connection-status" class="status disconnected">
+                <span class="status-dot disconnected"></span> Disconnected
+            </div>
+        </div>
+        
+        <div class="event-display" id="event-display"></div>
+        
+        <div class="video-container">
+            <img id="video-display" src="" alt="Camera Feed">
+            <canvas id="detection-overlay"></canvas>
+        </div>
+        
+        <div class="counters">
+            <div class="counter entry">
+                <h3>Entries</h3>
+                <div id="entry-counter">0</div>
+            </div>
+            <div class="counter exit">
+                <h3>Exits</h3>
+                <div id="exit-counter">0</div>
+            </div>
+        </div>
+        
+        <div class="fps-display" id="fps-display">FPS: 0</div>
+        
+        <div id="debug-log"></div>
+    </div>
+
+    <script>
+        // Elements
+        const cameraIdInput = document.getElementById('camera-id');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const serverAddressInput = document.getElementById('server-address');
+        const connectBtn = document.getElementById('connect-btn');
+        const disconnectBtn = document.getElementById('disconnect-btn');
+        const connectionStatus = document.getElementById('connection-status');
+        const videoDisplay = document.getElementById('video-display');
+        const detectionOverlay = document.getElementById('detection-overlay');
+        const eventDisplay = document.getElementById('event-display');
+        const entryCounter = document.getElementById('entry-counter');
+        const exitCounter = document.getElementById('exit-counter');
+        const fpsDisplay = document.getElementById('fps-display');
+        const debugLog = document.getElementById('debug-log');
+        
+        // WebSocket connection
+        let socket = null;
+        let token = null;
+        
+        // Performance variables
+        let frameCount = 0;
+        let lastFrameTime = Date.now();
+        let lastFrameDisplayTime = Date.now();
+        let frameRateLimit = 20; // Target max FPS
+        let entryCount = 0;
+        let exitCount = 0;
+        let reconnectAttempts = 0;
+        let maxReconnectAttempts = 5;
+        let autoReconnect = true;
+        
+        // Add to debug log
+        function log(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.textContent = `[${timestamp}] ${message}`;
+            debugLog.appendChild(logEntry);
+            debugLog.scrollTop = debugLog.scrollHeight;
+        }
+        
+        // Update event display
+        function updateEventDisplay(message, type) {
+            if (type === 'error') {
+                eventDisplay.style.backgroundColor = '#f2dede';
+                eventDisplay.style.color = '#a94442';
+            } else if (type === 'success') {
+                eventDisplay.style.backgroundColor = '#dff0d8';
+                eventDisplay.style.color = '#3c763d';
+            } else if (type === 'warning') {
+                eventDisplay.style.backgroundColor = '#fcf8e3';
+                eventDisplay.style.color = '#8a6d3b';
+            } else if (type === 'info') {
+                eventDisplay.style.backgroundColor = '#d9edf7';
+                eventDisplay.style.color = '#31708f';
+            } else {
+                // Reset to default style if no type or custom HTML
+                eventDisplay.style.backgroundColor = '#f8f8f8';
+                eventDisplay.style.color = '#333';
+            }
+            
+            eventDisplay.innerHTML = message;
+        }
+        
+        // Update connection status display
+        function updateConnectionStatus(connected) {
+            const statusDot = connectionStatus.querySelector('.status-dot');
+            
+            if (connected) {
+                connectionStatus.className = 'status connected';
+                statusDot.className = 'status-dot connected';
+                connectionStatus.textContent = '';
+                connectionStatus.appendChild(statusDot);
+                connectionStatus.appendChild(document.createTextNode(' Connected'));
+                
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+            } else {
+                connectionStatus.className = 'status disconnected';
+                statusDot.className = 'status-dot disconnected';
+                connectionStatus.textContent = '';
+                connectionStatus.appendChild(statusDot);
+                connectionStatus.appendChild(document.createTextNode(' Disconnected'));
+                
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+            }
+        }
+        
+        // Draw bounding boxes on detection overlay
+        function drawDetectionBoxes(detections, frameWidth, frameHeight) {
+            const ctx = detectionOverlay.getContext('2d');
+            ctx.clearRect(0, 0, detectionOverlay.width, detectionOverlay.height);
+            
+            // Set canvas dimensions to match video frame
+            detectionOverlay.width = frameWidth;
+            detectionOverlay.height = frameHeight;
+            
+            // Draw bounding boxes
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#4CAF50';
+            ctx.fillStyle = 'rgba(76, 175, 80, 0.2)';
+            
+            detections.forEach(detection => {
+                const [x1, y1, x2, y2] = detection.bbox;
+                const width = x2 - x1;
+                const height = y2 - y1;
+                
+                // Draw rectangle
+                ctx.beginPath();
+                ctx.rect(x1, y1, width, height);
+                ctx.stroke();
+                ctx.fill();
+                
+                // Draw label
+                ctx.fillStyle = '#4CAF50';
+                ctx.font = '12px Arial';
+                ctx.fillText(detection.label, x1 + 4, y1 + 16);
+            });
+        }
+        
+        // Update FPS counter
+        function updateFPS() {
+            const now = Date.now();
+            const elapsed = now - lastFrameTime;
+            
+            frameCount++;
+            
+            // Update FPS every second
+            if (elapsed >= 1000) {
+                const fps = Math.round((frameCount * 1000) / elapsed);
+                fpsDisplay.textContent = `FPS: ${fps}`;
+                
+                frameCount = 0;
+                lastFrameTime = now;
+            }
+        }
+        
+        // Get authentication token
+        async function getToken(username, password, serverAddress) {
+            log(`Getting token for user: ${username}`);
+            
+            try {
+                // Use proxy endpoint to avoid CORS issues
+                const response = await fetch(`/proxy-token?server=${encodeURIComponent(serverAddress)}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        username,
+                        password
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Authentication failed');
+                }
+                
+                if (!data.access_token) {
+                    throw new Error('No token received');
+                }
+                
+                log('Authentication successful');
+                return data.access_token;
+            } catch (error) {
+                log(`Authentication error: ${error.message}`);
+                throw error;
+            }
+        }
+        
+        // Connect to WebSocket
+        async function connect() {
+            const cameraId = cameraIdInput.value;
+            const username = usernameInput.value;
+            const password = passwordInput.value;
+            const serverAddress = serverAddressInput.value;
+            
+            if (!cameraId || !username || !password || !serverAddress) {
+                updateEventDisplay('Please fill in all fields', 'error');
+                return;
+            }
+            
+            updateEventDisplay('Authenticating...', 'info');
+            
+            try {
+                // Get token
+                token = await getToken(username, password, serverAddress);
+                
+                updateEventDisplay('Connecting to camera...', 'info');
+                
+                // Initialize WebSocket
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${wsProtocol}//${serverAddress}/api/ws/live-detections/${cameraId}?token=${token}`;
+                
+                socket = new WebSocket(wsUrl);
+                
+                // Setup event handlers
+                socket.onopen = () => {
+                    log(`WebSocket connected to camera ${cameraId}`);
+                    updateConnectionStatus(true);
+                    updateEventDisplay('Connected to camera', 'success');
+                    reconnectAttempts = 0;
+                };
+                
+                socket.onclose = event => {
+                    log(`WebSocket disconnected (code: ${event.code})`);
+                    updateConnectionStatus(false);
+                    updateEventDisplay(`Disconnected: ${event.reason || 'Connection closed'}`, 'warning');
+                    socket = null;
+                    
+                    // Clear canvas
+                    const ctx = detectionOverlay.getContext('2d');
+                    ctx.clearRect(0, 0, detectionOverlay.width, detectionOverlay.height);
+                    
+                    // Auto reconnect logic
+                    if (autoReconnect && reconnectAttempts < maxReconnectAttempts) {
+                        reconnectAttempts++;
+                        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+                        log(`Reconnect attempt ${reconnectAttempts} in ${delay/1000} seconds...`);
+                        setTimeout(connect, delay);
+                    }
+                };
+                
+                socket.onerror = error => {
+                    log(`WebSocket error: ${error.message || 'Unknown error'}`);
+                };
+                
+                socket.onmessage = async event => {
+                    try {
+                        const now = Date.now();
+                        const data = JSON.parse(event.data);
+                        
+                        // Handle connection confirmation
+                        if (data.status === 'connected') {
+                            log(`Received confirmation: ${data.message}`);
+                            return;
+                        }
+                        
+                        // Handle errors
+                        if (data.status === 'error') {
+                            updateEventDisplay(`Error: ${data.message}`, 'error');
+                            return;
+                        }
+                        
+                        // Frame rate limiting - skip frames if we're receiving too quickly
+                        const timeSinceLastFrame = now - lastFrameDisplayTime;
+                        const framePeriod = 1000 / frameRateLimit;
+                        
+                        if (timeSinceLastFrame < framePeriod) {
+                            return; // Skip this frame for smooth playback
+                        }
+                        
+                        // Update FPS counter
+                        updateFPS();
+                        
+                        // Display the frame
+                        if (data.frame) {
+                            // Preload image for smoother display
+                            const img = new Image();
+                            
+                            img.onload = () => {
+                                // Set the image source
+                                videoDisplay.src = img.src;
+                                
+                                // Resize canvas to match image dimensions
+                                if (detectionOverlay.width !== img.width || detectionOverlay.height !== img.height) {
+                                    detectionOverlay.width = img.width;
+                                    detectionOverlay.height = img.height;
+                                }
+                                
+                                // Draw detection boxes if any
+                                if (data.detections && data.detections.length > 0) {
+                                    drawDetectionBoxes(data.detections, img.width, img.height);
+                                } else {
+                                    // Clear canvas if no detections
+                                    const ctx = detectionOverlay.getContext('2d');
+                                    ctx.clearRect(0, 0, detectionOverlay.width, detectionOverlay.height);
+                                }
+                                
+                                lastFrameDisplayTime = now;
+                            };
+                            
+                            img.src = `data:image/jpeg;base64,${data.frame}`;
+                        }
+                        
+                        // Handle crossing events
+                        if (data.crossing_detected && data.event) {
+                            const eventType = data.event;
+                            
+                            // Update counters
+                            if (eventType === 'entry') {
+                                entryCounter.textContent = ++entryCount;
+                                updateEventDisplay(`<strong>ENTRY DETECTED</strong> at ${data.timestamp}`, 'success');
+                            } else if (eventType === 'exit') {
+                                exitCounter.textContent = ++exitCount;
+                                updateEventDisplay(`<strong>EXIT DETECTED</strong> at ${data.timestamp}`, 'warning');
+                            }
+                        }
+                    } catch (error) {
+                        log(`Error processing message: ${error.message}`);
+                    }
+                };
+            } catch (error) {
+                updateEventDisplay(`Connection failed: ${error.message}`, 'error');
+            }
+        }
+        
+        // Disconnect from WebSocket
+        function disconnect() {
+            if (socket) {
+                autoReconnect = false;
+                socket.close();
+                socket = null;
+                
+                updateConnectionStatus(false);
+                updateEventDisplay('Disconnected', 'info');
+                
+                // Clear the video frame
+                videoDisplay.src = '';
+                
+                // Clear canvas
+                const ctx = detectionOverlay.getContext('2d');
+                ctx.clearRect(0, 0, detectionOverlay.width, detectionOverlay.height);
+                
+                log('WebSocket disconnected');
+            }
+        }
+        
+        // Event listeners
+        connectBtn.addEventListener('click', () => {
+            autoReconnect = true;
+            connect();
+        });
+        
+        disconnectBtn.addEventListener('click', () => {
+            disconnect();
+        });
+        
+        // Initial state
+        updateConnectionStatus(false);
+    </script>
+</body>
+</html>

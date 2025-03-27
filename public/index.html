@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZVision Basic Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .controls {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 10px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            cursor: pointer;
+            border-radius: 4px;
+            margin-right: 5px;
+            margin-bottom: 5px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button.danger {
+            background-color: #f44336;
+        }
+        button.danger:hover {
+            background-color: #d32f2f;
+        }
+        .stream-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .stream-card {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 640px;
+        }
+        .stream-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background-color: #f5f5f5;
+            border-bottom: 1px solid #ddd;
+        }
+        .stream-body {
+            position: relative;
+        }
+        .stream-img {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+        .detection-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        .status-panel {
+            margin-top: 10px;
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+            overflow: auto;
+            max-height: 150px;
+        }
+        .status-panel pre {
+            margin: 0;
+            white-space: pre-wrap;
+        }
+        .detection-box {
+            position: absolute;
+            border: 2px solid red;
+            box-sizing: border-box;
+            pointer-events: none;
+        }
+        .detection-label {
+            position: absolute;
+            background-color: rgba(255, 0, 0, 0.7);
+            color: white;
+            padding: 2px 4px;
+            font-size: 12px;
+            pointer-events: none;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ZVision Basic Client</h1>
+        
+        <div class="controls">
+            <h2>Camera Controls</h2>
+            <div class="form-group">
+                <label for="camera-id">Camera ID:</label>
+                <input type="number" id="camera-id" min="1" value="1">
+            </div>
+            <div class="form-group">
+                <label for="camera-source">Camera Source:</label>
+                <input type="text" id="camera-source" value="/dev/video0" placeholder="Device path, URL, or file path">
+            </div>
+            <div class="form-group">
+                <label for="enable-detection">Enable Detection:</label>
+                <input type="checkbox" id="enable-detection" checked>
+            </div>
+            <button id="add-camera">Add Camera</button>
+            <button id="refresh-status">Refresh Status</button>
+        </div>
+        
+        <div class="stream-container" id="stream-container">
+            <!-- Stream cards will be added here -->
+        </div>
+        
+        <div class="status-panel">
+            <h3>Status</h3>
+            <pre id="status-output">Ready.</pre>
+        </div>
+    </div>
+
+    <script>
+        // API Configuration
+        const API_BASE_URL = 'http://localhost:8000/api';
+        const STREAM_BASE_URL = 'http://localhost:8000';
+        
+        // DOM Elements
+        const cameraIdInput = document.getElementById('camera-id');
+        const cameraSourceInput = document.getElementById('camera-source');
+        const enableDetectionInput = document.getElementById('enable-detection');
+        const addCameraBtn = document.getElementById('add-camera');
+        const refreshStatusBtn = document.getElementById('refresh-status');
+        const streamContainer = document.getElementById('stream-container');
+        const statusOutput = document.getElementById('status-output');
+        
+        // Active cameras (for tracking)
+        const activeCameras = new Set();
+        
+        // Utility functions
+        function logStatus(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            statusOutput.textContent = `[${timestamp}] ${message}\n${statusOutput.textContent}`;
+        }
+        
+        async function fetchWithTimeout(url, options = {}, timeout = 5000) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeout);
+            
+            try {
+                const response = await fetch(url, {
+                    ...options,
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                return response;
+            } catch (error) {
+                clearTimeout(timeoutId);
+                throw error;
+            }
+        }
+        
+        // API Functions
+        async function addCamera(cameraId, source, enableDetection) {
+            try {
+                const payload = {
+                    camera_id: cameraId,
+                    source: source,
+                    enable_detection: enableDetection
+                };
+                
+                const response = await fetchWithTimeout(`${API_BASE_URL}/camera/add`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Error adding camera: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                logStatus(`Camera ${cameraId} added successfully`);
+                activeCameras.add(cameraId);
+                createStreamCard(cameraId, enableDetection);
+                return data;
+            } catch (error) {
+                logStatus(`Failed to add camera: ${error.message}`);
+                throw error;
+            }
+        }
+        
+        async function getCameraStatus(cameraId) {
+            try {
+                const response = await fetchWithTimeout(`${API_BASE_URL}/camera/${cameraId}/status`);
+                
+                if (!response.ok) {
+                    throw new Error(`Error getting status: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                logStatus(`Camera ${cameraId} status updated`);
+                updateStreamCardStatus(cameraId, data);
+                return data;
+            } catch (error) {
+                logStatus(`Failed to get camera status: ${error.message}`);
+                throw error;
+            }
+        }
+        
+        async function enableDetection(cameraId) {
+            try {
+                const response = await fetchWithTimeout(`${API_BASE_URL}/camera/${cameraId}/enable_detection`);
+                
+                if (!response.ok) {
+                    throw new Error(`Error enabling detection: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                logStatus(`Detection enabled for camera ${cameraId}`);
+                return data;
+            } catch (error) {
+                logStatus(`Failed to enable detection: ${error.message}`);
+                throw error;
+            }
+        }
+        
+        async function disableDetection(cameraId) {
+            try {
+                const response = await fetchWithTimeout(`${API_BASE_URL}/camera/${cameraId}/disable_detection`);
+                
+                if (!response.ok) {
+                    throw new Error(`Error disabling detection: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                logStatus(`Detection disabled for camera ${cameraId}`);
+                return data;
+            } catch (error) {
+                logStatus(`Failed to disable detection: ${error.message}`);
+                throw error;
+            }
+        }
+        
+        async function getDetectionStatus(cameraId) {
+            try {
+                const response = await fetchWithTimeout(`${API_BASE_URL}/camera/${cameraId}/detection/status`);
+                
+                if (!response.ok) {
+                    throw new Error(`Error getting detection status: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                updateDetectionStatus(cameraId, data);
+                return data;
+            } catch (error) {
+                console.error(`Failed to get detection status: ${error.message}`);
+                return null;
+            }
+        }
+        
+        async function runDetection(cameraId) {
+            try {
+                const response = await fetchWithTimeout(`${API_BASE_URL}/detect?camera_id=${cameraId}`);
+                
+                if (!response.ok) {
+                    throw new Error(`Error running detection: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                updateDetectionResults(cameraId, data);
+                return data;
+            } catch (error) {
+                console.error(`Failed to run detection: ${error.message}`);
+                return null;
+            }
+        }
+        
+        // UI Functions
+        function createStreamCard(cameraId, detectionEnabled) {
+            // Check if card already exists
+            const existingCard = document.getElementById(`stream-card-${cameraId}`);
+            if (existingCard) {
+                return;
+            }
+            
+            const card = document.createElement('div');
+            card.id = `stream-card-${cameraId}`;
+            card.className = 'stream-card';
+            
+            card.innerHTML = `
+                <div class="stream-header">
+                    <h3>Camera ${cameraId}</h3>
+                    <div class="stream-controls">
+                        <button class="detection-toggle ${detectionEnabled ? 'danger' : ''}" 
+                                data-camera-id="${cameraId}" 
+                                data-action="${detectionEnabled ? 'disable' : 'enable'}">
+                            ${detectionEnabled ? 'Disable' : 'Enable'} Detection
+                        </button>
+                        <button class="remove-camera danger" data-camera-id="${cameraId}">
+                            Remove Camera
+                        </button>
+                    </div>
+                </div>
+                <div class="stream-body">
+                    <img class="stream-img" id="stream-img-${cameraId}" 
+                         src="${STREAM_BASE_URL}/camera/${cameraId}/feed" 
+                         alt="Camera Stream ${cameraId}">
+                    <div class="detection-overlay" id="detection-overlay-${cameraId}"></div>
+                </div>
+                <div class="stream-status">
+                    <p>Status: <span id="camera-status-${cameraId}">Loading...</span></p>
+                    <p>FPS: <span id="camera-fps-${cameraId}">-</span></p>
+                    <p>Detection: <span id="detection-status-${cameraId}">${detectionEnabled ? 'Enabled' : 'Disabled'}</span></p>
+                </div>
+            `;
+            
+            streamContainer.appendChild(card);
+            
+            // Add event listeners
+            const toggleBtn = card.querySelector('.detection-toggle');
+            toggleBtn.addEventListener('click', async () => {
+                const action = toggleBtn.dataset.action;
+                try {
+                    if (action === 'enable') {
+                        await enableDetection(cameraId);
+                        toggleBtn.textContent = 'Disable Detection';
+                        toggleBtn.dataset.action = 'disable';
+                        toggleBtn.classList.add('danger');
+                        document.getElementById(`detection-status-${cameraId}`).textContent = 'Enabled';
+                    } else {
+                        await disableDetection(cameraId);
+                        toggleBtn.textContent = 'Enable Detection';
+                        toggleBtn.dataset.action = 'enable';
+                        toggleBtn.classList.remove('danger');
+                        document.getElementById(`detection-status-${cameraId}`).textContent = 'Disabled';
+                    }
+                } catch (error) {
+                    logStatus(`Error toggling detection: ${error.message}`);
+                }
+            });
+            
+            const removeBtn = card.querySelector('.remove-camera');
+            removeBtn.addEventListener('click', async () => {
+                try {
+                    // Since there's no dedicated removal endpoint, we'll replace with a dummy camera
+                    await addCamera(cameraId, "none://dummy", false);
+                    logStatus(`Camera ${cameraId} removed`);
+                    activeCameras.delete(cameraId);
+                    card.remove();
+                } catch (error) {
+                    logStatus(`Error removing camera: ${error.message}`);
+                }
+            });
+            
+            // Start regular status updates
+            startStatusUpdates(cameraId);
+        }
+        
+        function updateStreamCardStatus(cameraId, statusData) {
+            const statusElement = document.getElementById(`camera-status-${cameraId}`);
+            const fpsElement = document.getElementById(`camera-fps-${cameraId}`);
+            
+            if (statusElement && statusData) {
+                statusElement.textContent = statusData.status || 'Unknown';
+                fpsElement.textContent = statusData.fps || '0';
+            }
+        }
+        
+        function updateDetectionStatus(cameraId, statusData) {
+            const detectionStatusElement = document.getElementById(`detection-status-${cameraId}`);
+            
+            if (detectionStatusElement && statusData) {
+                const isEnabled = statusData.detection_enabled || false;
+                detectionStatusElement.textContent = isEnabled ? 'Enabled' : 'Disabled';
+                
+                // Update the toggle button if needed
+                const toggleBtn = document.querySelector(`.detection-toggle[data-camera-id="${cameraId}"]`);
+                if (toggleBtn) {
+                    if (isEnabled && toggleBtn.dataset.action !== 'disable') {
+                        toggleBtn.textContent = 'Disable Detection';
+                        toggleBtn.dataset.action = 'disable';
+                        toggleBtn.classList.add('danger');
+                    } else if (!isEnabled && toggleBtn.dataset.action !== 'enable') {
+                        toggleBtn.textContent = 'Enable Detection';
+                        toggleBtn.dataset.action = 'enable';
+                        toggleBtn.classList.remove('danger');
+                    }
+                }
+            }
+        }
+        
+        function updateDetectionResults(cameraId, detectionData) {
+            const overlay = document.getElementById(`detection-overlay-${cameraId}`);
+            const img = document.getElementById(`stream-img-${cameraId}`);
+            
+            if (!overlay || !img || !detectionData || !detectionData.boxes) {
+                return;
+            }
+            
+            // Clear previous detections
+            overlay.innerHTML = '';
+            
+            // Get the actual dimensions of the image as displayed (may differ from natural size due to CSS)
+            const displayWidth = img.clientWidth;
+            const displayHeight = img.clientHeight;
+            const naturalWidth = img.naturalWidth || displayWidth;
+            const naturalHeight = img.naturalHeight || displayHeight;
+            
+            // Scale factor between natural and display dimensions
+            const scaleX = displayWidth / naturalWidth;
+            const scaleY = displayHeight / naturalHeight;
+            
+            // Draw boxes for each detection
+            detectionData.boxes.forEach((box, index) => {
+                const [x1, y1, x2, y2] = box;
+                const label = detectionData.labels?.[index] || 'Object';
+                const score = detectionData.scores?.[index] || 1.0;
+                
+                // Scale coordinates to display size
+                const displayX1 = x1 * scaleX;
+                const displayY1 = y1 * scaleY;
+                const displayX2 = x2 * scaleX;
+                const displayY2 = y2 * scaleY;
+                
+                // Create box element
+                const boxElement = document.createElement('div');
+                boxElement.className = 'detection-box';
+                boxElement.style.left = `${displayX1}px`;
+                boxElement.style.top = `${displayY1}px`;
+                boxElement.style.width = `${displayX2 - displayX1}px`;
+                boxElement.style.height = `${displayY2 - displayY1}px`;
+                
+                // Create label element
+                const labelElement = document.createElement('div');
+                labelElement.className = 'detection-label';
+                labelElement.style.left = `${displayX1}px`;
+                labelElement.style.top = `${displayY1 - 20}px`;
+                labelElement.textContent = `${label} ${(score * 100).toFixed(0)}%`;
+                
+                overlay.appendChild(boxElement);
+                overlay.appendChild(labelElement);
+            });
+        }
+        
+        // Status update functionality
+        const statusIntervals = {};
+        
+        function startStatusUpdates(cameraId) {
+            if (statusIntervals[cameraId]) {
+                clearInterval(statusIntervals[cameraId]);
+            }
+            
+            // Update status and try to get detection results every second
+            statusIntervals[cameraId] = setInterval(async () => {
+                if (!activeCameras.has(cameraId)) {
+                    clearInterval(statusIntervals[cameraId]);
+                    return;
+                }
+                
+                try {
+                    await getCameraStatus(cameraId);
+                    await getDetectionStatus(cameraId);
+                    
+                    // Try to get detection results if detection is enabled
+                    const statusElement = document.getElementById(`detection-status-${cameraId}`);
+                    if (statusElement && statusElement.textContent === 'Enabled') {
+                        await runDetection(cameraId);
+                    }
+                } catch (error) {
+                    console.error(`Error updating status for camera ${cameraId}:`, error);
+                }
+            }, 1000);
+        }
+        
+        // Event Listeners
+        addCameraBtn.addEventListener('click', async () => {
+            const cameraId = parseInt(cameraIdInput.value);
+            const source = cameraSourceInput.value.trim();
+            const enableDetection = enableDetectionInput.checked;
+            
+            if (!cameraId || !source) {
+                logStatus('Camera ID and source are required');
+                return;
+            }
+            
+            try {
+                await addCamera(cameraId, source, enableDetection);
+            } catch (error) {
+                // Error is already logged in the addCamera function
+            }
+        });
+        
+        refreshStatusBtn.addEventListener('click', async () => {
+            for (const cameraId of activeCameras) {
+                try {
+                    await getCameraStatus(cameraId);
+                    await getDetectionStatus(cameraId);
+                } catch (error) {
+                    // Errors are already logged in the API functions
+                }
+            }
+        });
+        
+        // Initialize
+        async function init() {
+            logStatus('Initializing ZVision client...');
+            
+            try {
+                // Try to get list of existing cameras
+                const response = await fetchWithTimeout(`${API_BASE_URL}/camera/list`);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    const cameras = data.cameras || [];
+                    
+                    if (cameras.length > 0) {
+                        logStatus(`Found ${cameras.length} existing cameras`);
+                        
+                        cameras.forEach(camera => {
+                            const cameraId = camera.camera_id;
+                            if (cameraId) {
+                                const detectionEnabled = camera.status?.detection_enabled || false;
+                                activeCameras.add(cameraId);
+                                createStreamCard(cameraId, detectionEnabled);
+                            }
+                        });
+                    } else {
+                        logStatus('No existing cameras found');
+                    }
+                } else {
+                    logStatus('Could not retrieve camera list, server may be offline');
+                }
+            } catch (error) {
+                logStatus(`Initialization error: ${error.message}`);
+            }
+        }
+        
+        // Start the application
+        init();
+    </script>
+</body>
+</html> 

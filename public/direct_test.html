@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZVision Direct Test Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .controls {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 10px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            cursor: pointer;
+            border-radius: 4px;
+            margin-right: 5px;
+            margin-bottom: 5px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button.danger {
+            background-color: #f44336;
+        }
+        button.danger:hover {
+            background-color: #d32f2f;
+        }
+        .stream-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .stream-card {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 640px;
+        }
+        .stream-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background-color: #f5f5f5;
+            border-bottom: 1px solid #ddd;
+        }
+        .stream-body {
+            position: relative;
+        }
+        .stream-img {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+        .detection-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        .status-panel {
+            margin-top: 10px;
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+            overflow: auto;
+            max-height: 150px;
+        }
+        .status-panel pre {
+            margin: 0;
+            white-space: pre-wrap;
+        }
+        .detection-box {
+            position: absolute;
+            border: 2px solid red;
+            box-sizing: border-box;
+            pointer-events: none;
+        }
+        .detection-label {
+            position: absolute;
+            background-color: rgba(255, 0, 0, 0.7);
+            color: white;
+            padding: 2px 4px;
+            font-size: 12px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ZVision Direct Test Client</h1>
+        <div class="alert">
+            <p><strong>Note:</strong> This is a direct test interface that bypasses the API endpoints.</p>
+        </div>
+        
+        <div class="controls">
+            <h2>Camera Controls</h2>
+            <div class="form-group">
+                <label for="camera-id">Camera ID:</label>
+                <input type="number" id="camera-id" min="1" value="1">
+            </div>
+            <div class="form-group">
+                <label for="camera-source">Camera Source:</label>
+                <input type="text" id="camera-source" value="/dev/video0" placeholder="Device path, URL, or file path">
+            </div>
+            <div class="form-group">
+                <label for="enable-detection">Enable Detection:</label>
+                <input type="checkbox" id="enable-detection" checked>
+            </div>
+            <button id="start-camera">Start Camera</button>
+            <button id="stop-camera" class="danger">Stop Camera</button>
+        </div>
+        
+        <div class="stream-container">
+            <div class="stream-card">
+                <div class="stream-header">
+                    <h3>Camera <span id="camera-id-display">1</span></h3>
+                    <div class="stream-controls">
+                        <button id="toggle-detection">Toggle Detection</button>
+                    </div>
+                </div>
+                <div class="stream-body">
+                    <canvas id="camera-canvas" width="640" height="480"></canvas>
+                    <div class="detection-overlay" id="detection-overlay"></div>
+                </div>
+                <div class="stream-status">
+                    <p>Status: <span id="camera-status">Inactive</span></p>
+                    <p>FPS: <span id="camera-fps">-</span></p>
+                    <p>Detection: <span id="detection-status">Disabled</span></p>
+                    <p>Objects Detected: <span id="detection-count">0</span></p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="status-panel">
+            <h3>Status</h3>
+            <pre id="status-output">Ready to start camera directly...</pre>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const cameraIdInput = document.getElementById('camera-id');
+        const cameraSourceInput = document.getElementById('camera-source');
+        const enableDetectionInput = document.getElementById('enable-detection');
+        const startCameraBtn = document.getElementById('start-camera');
+        const stopCameraBtn = document.getElementById('stop-camera');
+        const toggleDetectionBtn = document.getElementById('toggle-detection');
+        const cameraIdDisplay = document.getElementById('camera-id-display');
+        const canvas = document.getElementById('camera-canvas');
+        const ctx = canvas.getContext('2d');
+        const detectionOverlay = document.getElementById('detection-overlay');
+        const cameraStatusElement = document.getElementById('camera-status');
+        const cameraFpsElement = document.getElementById('camera-fps');
+        const detectionStatusElement = document.getElementById('detection-status');
+        const detectionCountElement = document.getElementById('detection-count');
+        const statusOutput = document.getElementById('status-output');
+        
+        // State variables
+        let isRunning = false;
+        let detectionEnabled = false;
+        let frameRequestId = null;
+        
+        // Log helper function
+        function logStatus(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            statusOutput.textContent = `[${timestamp}] ${message}\n${statusOutput.textContent}`;
+        }
+        
+        // Start the camera using the direct Python implementation
+        startCameraBtn.addEventListener('click', async () => {
+            const cameraId = parseInt(cameraIdInput.value);
+            const source = cameraSourceInput.value.trim();
+            const enableDetection = enableDetectionInput.checked;
+            
+            if (!cameraId || !source) {
+                logStatus('Camera ID and source are required');
+                return;
+            }
+            
+            try {
+                // Call a Python endpoint that uses the direct worker implementation
+                const response = await fetch('/test/start_camera', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        camera_id: cameraId,
+                        source: source,
+                        enable_detection: enableDetection
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Error starting camera: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                logStatus(`Camera ${cameraId} started: ${data.status}`);
+                
+                // Update UI
+                cameraIdDisplay.textContent = cameraId;
+                cameraStatusElement.textContent = data.status;
+                detectionEnabled = enableDetection;
+                detectionStatusElement.textContent = enableDetection ? 'Enabled' : 'Disabled';
+                
+                // Start frame updating
+                isRunning = true;
+                startFrameUpdates(cameraId);
+                
+            } catch (error) {
+                logStatus(`Failed to start camera: ${error.message}`);
+            }
+        });
+        
+        // Stop the camera
+        stopCameraBtn.addEventListener('click', async () => {
+            const cameraId = parseInt(cameraIdInput.value);
+            
+            if (!isRunning) {
+                logStatus('No camera is running');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/test/stop_camera', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        camera_id: cameraId
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Error stopping camera: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                logStatus(`Camera ${cameraId} stopped: ${data.status}`);
+                
+                // Update UI
+                isRunning = false;
+                stopFrameUpdates();
+                cameraStatusElement.textContent = 'Inactive';
+                cameraFpsElement.textContent = '-';
+                detectionStatusElement.textContent = 'Disabled';
+                detectionCountElement.textContent = '0';
+                
+                // Clear canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                detectionOverlay.innerHTML = '';
+                
+            } catch (error) {
+                logStatus(`Failed to stop camera: ${error.message}`);
+            }
+        });
+        
+        // Toggle detection
+        toggleDetectionBtn.addEventListener('click', async () => {
+            const cameraId = parseInt(cameraIdInput.value);
+            
+            if (!isRunning) {
+                logStatus('No camera is running');
+                return;
+            }
+            
+            try {
+                const action = detectionEnabled ? 'disable' : 'enable';
+                const response = await fetch(`/test/${action}_detection`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        camera_id: cameraId
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Error toggling detection: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                detectionEnabled = !detectionEnabled;
+                logStatus(`Detection ${detectionEnabled ? 'enabled' : 'disabled'} for camera ${cameraId}`);
+                
+                // Update UI
+                detectionStatusElement.textContent = detectionEnabled ? 'Enabled' : 'Disabled';
+                
+                // Clear detection overlay if disabled
+                if (!detectionEnabled) {
+                    detectionOverlay.innerHTML = '';
+                    detectionCountElement.textContent = '0';
+                }
+                
+            } catch (error) {
+                logStatus(`Failed to toggle detection: ${error.message}`);
+            }
+        });
+        
+        // Function to start updating frames
+        function startFrameUpdates(cameraId) {
+            // Stop any existing updates
+            stopFrameUpdates();
+            
+            // Start a loop to update the frame and status
+            function updateFrame() {
+                if (!isRunning) return;
+                
+                // Get a frame
+                fetch(`/test/get_frame?camera_id=${cameraId}`)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`Error getting frame: ${response.status} ${response.statusText}`);
+                        }
+                        return response.blob();
+                    })
+                    .then(blob => {
+                        // Create an image from the blob
+                        const url = URL.createObjectURL(blob);
+                        const img = new Image();
+                        img.onload = () => {
+                            // Draw the image on the canvas
+                            ctx.clearRect(0, 0, canvas.width, canvas.height);
+                            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                            URL.revokeObjectURL(url);
+                        };
+                        img.src = url;
+                    })
+                    .catch(error => {
+                        console.error(`Failed to get frame: ${error.message}`);
+                    });
+                
+                // Get status
+                fetch(`/test/get_status?camera_id=${cameraId}`)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`Error getting status: ${response.status} ${response.statusText}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        // Update status elements
+                        cameraStatusElement.textContent = data.camera_status || 'Unknown';
+                        cameraFpsElement.textContent = data.fps ? data.fps.toFixed(1) : '-';
+                        
+                        // Check if detection is enabled
+                        if (detectionEnabled) {
+                            // Get detection results
+                            return fetch(`/test/get_detection?camera_id=${cameraId}`);
+                        }
+                    })
+                    .then(response => {
+                        if (response && response.ok) {
+                            return response.json();
+                        }
+                        return null;
+                    })
+                    .then(data => {
+                        if (data && data.boxes) {
+                            // Update detection overlay
+                            updateDetectionOverlay(data);
+                            detectionCountElement.textContent = data.count || '0';
+                        }
+                    })
+                    .catch(error => {
+                        console.error(`Failed to get status: ${error.message}`);
+                    });
+                
+                // Schedule next update
+                frameRequestId = requestAnimationFrame(updateFrame);
+            }
+            
+            // Start the update loop
+            updateFrame();
+        }
+        
+        // Function to stop frame updates
+        function stopFrameUpdates() {
+            if (frameRequestId) {
+                cancelAnimationFrame(frameRequestId);
+                frameRequestId = null;
+            }
+        }
+        
+        // Function to update detection overlay
+        function updateDetectionOverlay(detectionData) {
+            // Clear previous detections
+            detectionOverlay.innerHTML = '';
+            
+            // Get the canvas dimensions
+            const canvasRect = canvas.getBoundingClientRect();
+            
+            // Calculate scale factors
+            const scaleX = canvasRect.width / canvas.width;
+            const scaleY = canvasRect.height / canvas.height;
+            
+            // Draw boxes for each detection
+            if (detectionData.boxes && Array.isArray(detectionData.boxes)) {
+                detectionData.boxes.forEach((box, index) => {
+                    if (box && box.length === 4) {
+                        const [x1, y1, x2, y2] = box;
+                        const label = detectionData.labels ? detectionData.labels[index] || 'Person' : 'Person';
+                        const score = detectionData.scores ? detectionData.scores[index] || 1.0 : 1.0;
+                        
+                        // Scale coordinates to display size
+                        const displayX1 = x1 * scaleX;
+                        const displayY1 = y1 * scaleY;
+                        const displayX2 = x2 * scaleX;
+                        const displayY2 = y2 * scaleY;
+                        
+                        // Create box element
+                        const boxElement = document.createElement('div');
+                        boxElement.className = 'detection-box';
+                        boxElement.style.left = `${displayX1}px`;
+                        boxElement.style.top = `${displayY1}px`;
+                        boxElement.style.width = `${displayX2 - displayX1}px`;
+                        boxElement.style.height = `${displayY2 - displayY1}px`;
+                        
+                        // Create label element
+                        const labelElement = document.createElement('div');
+                        labelElement.className = 'detection-label';
+                        labelElement.style.left = `${displayX1}px`;
+                        labelElement.style.top = `${displayY1 - 20}px`;
+                        labelElement.textContent = `${label} ${(score * 100).toFixed(0)}%`;
+                        
+                        detectionOverlay.appendChild(boxElement);
+                        detectionOverlay.appendChild(labelElement);
+                    }
+                });
+            }
+        }
+    </script>
+</body>
+</html> 

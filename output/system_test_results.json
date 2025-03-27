@@ -1,0 +1,16 @@
+{
+  "startup": {
+    "add_camera": {
+      "success": true,
+      "result": {
+        "camera_id": 1,
+        "source": "/dev/video0",
+        "status": "starting",
+        "detection_enabled": true,
+        "message": "Camera added successfully"
+      }
+    },
+    "camera_ready": false
+  },
+  "early_termination": true
+}
